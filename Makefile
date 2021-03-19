@@ -89,7 +89,12 @@ endif
 ifneq ($(shell $(CC) -dumpspecs 2>/dev/null | grep -e '[^f]nopie'),)
 CFLAGS += -fno-pie -nopie
 endif
-
+#Aditya: dd command converts and copy file
+#Aditya: if=FILE means read from file instead stdin
+#Aditya: of=FILE means write to file instead stdout
+#Aditya: count=N menas copy only N input blocks
+#Aditya: conv=CONVS means convert the file as per the comma separated symbol list (notrunc:do not truncate the output file)
+#Aditya: seek=N skip N obs-sized blocks at start of output
 xv6.img: bootblock kernel
 	dd if=/dev/zero of=xv6.img count=10000
 	dd if=bootblock of=xv6.img conv=notrunc
@@ -205,7 +210,7 @@ xv6.pdf: $(PRINT)
 print: xv6.pdf
 
 # run in emulators
-
+#Aditya: Makes soft link for dot-bochsrc
 bochs : fs.img xv6.img
 	if [ ! -e .bochsrc ]; then ln -s dot-bochsrc .bochsrc; fi
 	bochs -q

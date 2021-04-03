@@ -9,6 +9,10 @@ struct spinlock;
 struct sleeplock;
 struct stat;
 struct superblock;
+struct filesystem_type;
+struct inode_operations;
+struct vfs_operations;
+
 
 // bio.c
 void            binit(void);

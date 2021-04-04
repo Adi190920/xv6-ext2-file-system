@@ -9,13 +9,10 @@ struct spinlock;
 struct sleeplock;
 struct stat;
 struct superblock;
-<<<<<<< HEAD
-=======
 struct filesystem_type;
 struct inode_operations;
 struct vfs_operations;
 
->>>>>>> c5e0f66b2ce925c449140d1eb80bb4d5dd08d035
 
 // bio.c
 void            binit(void);
@@ -195,3 +192,29 @@ void            clearpteu(pde_t *pgdir, char *uva);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
+
+//inbuilt_fs.c
+struct inode *  inbuiltfs_dirlookup( struct inode * dp , char * name , uint * off );
+ void           inbuiltfs_iupdate( struct inode * ip );
+ void           inbuiltfs_itrunc( struct inode * ip );
+ void           inbuiltfs_cleanup( struct inode * ip );
+ uint           inbuiltfs_bmap( struct inode * ip , uint bn );
+ void           inbuiltfs_ilock( struct inode * ip );
+ void           inbuiltfs_iunlock( struct inode * ip );
+ void           inbuiltfs_stati( struct inode * ip , struct stat * st );
+ int            inbuiltfs_readi( struct inode * ip , char * dst , uint off , uint n );
+ int            inbuiltfs_writei( struct inode * ip , char * src , uint off , uint n );
+ int            inbuiltfs_dirlink( struct inode * dp , char * name , uint inum  );
+ int            inbuiltfs_unlink( struct inode * dp , uint off );
+ int            inbuiltfs_isdirempty( struct inode * dp );
+ void           inbuiltfs_iinit(int );
+ struct inode * inbuiltfs_getroot( int , int );
+ void           inbuiltfs_readsb( int dev , struct superblock * sb );    
+ struct inode * inbuiltfs_ialloc( uint dev , short type );
+ uint           inbuiltfs_balloc( uint dev );
+//  void           inbuiltfs_bzero( int dev , int bno );
+ void           inbuiltfs_bfree( int dev , uint b );
+//  void           inbuiltfs_brelse( struct buf * b );
+//  void           inbuiltfs_bwrite( struct buf * b );
+//  struct buf *   inbuiltfs_bread(uint dev , uint blockno );
+int             inbuiltfs_namecmp( const char *s , const char * t );

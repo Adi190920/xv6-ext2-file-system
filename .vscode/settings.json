@@ -1,6 +1,10 @@
 {
     "files.associations": {
+<<<<<<< HEAD
         "string.h": "c",
         "stdio.h": "c"
+=======
+        "fs.h": "c"
+>>>>>>> c5e0f66b2ce925c449140d1eb80bb4d5dd08d035
     }
 }

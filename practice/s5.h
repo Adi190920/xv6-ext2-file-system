@@ -1,0 +1,1 @@
+char *s5_read(int, int);

@@ -1,0 +1,1 @@
+char *ext2_read(int, int);

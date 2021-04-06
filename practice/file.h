@@ -5,7 +5,7 @@ struct file{
 
 
 struct inode{
-    char str[10];
+    char str[5];
     struct file *file_type;
 };
 

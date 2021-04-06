@@ -5,7 +5,7 @@
 #include "sleeplock.h"
 #include "fs.h"
 #include "buf.h"
-
+#include "vfs.h"
 // Simple logging that allows concurrent FS system calls.
 //
 // A log transaction contains the updates of multiple FS system
@@ -49,6 +49,10 @@ struct log log;
 
 static void recover_from_log(void);
 static void commit();
+
+extern struct file_type inbuiltfs;
+extern struct inode_operations inbuiltfs_iops;
+
 
 void
 initlog(int dev)

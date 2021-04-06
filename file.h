@@ -1,3 +1,4 @@
+
 struct file {
   enum { FD_NONE, FD_PIPE, FD_INODE } type;
   int ref; // reference count
@@ -16,7 +17,7 @@ struct inode {
   int ref;            // Reference count
   struct sleeplock lock; // protects everything below here
   int valid;          // inode has been read from disk?
-
+  struct filesystem_type *file_type;  // filesystem type
   short type;         // copy of disk inode
   short major;
   short minor;

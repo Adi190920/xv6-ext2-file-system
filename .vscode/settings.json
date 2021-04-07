@@ -1,5 +1,6 @@
 {
     "files.associations": {
-        "fs.h": "c"
+        "fs.h": "c",
+        "syscall.h": "c"
     }
 }

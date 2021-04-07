@@ -1,6 +1,12 @@
 {
     "files.associations": {
         "fs.h": "c",
-        "syscall.h": "c"
+        "syscall.h": "c",
+        "stat.h": "c",
+        "fcntl.h": "c",
+        "user.h": "c",
+        "types.h": "c",
+        "unistd.h": "c",
+        "memlayout.h": "c"
     }
 }

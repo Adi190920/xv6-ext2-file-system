@@ -444,6 +444,20 @@ sys_pipe(void)
   return 0;
 }
 int sys_lseek(void) {
-  cprintf("hello\n");
-  return 0;
+  struct file *f;
+  int n;
+  int seek;
+  if(argfd(0, 0, &f) < 0 || argint(1, &n) < 0 || argint(2, &seek) < 0) {
+    return 1;
+  }
+  else if(seek == SEEK_SET) {
+    f->off = n;
+  }
+  else if(seek ==  SEEK_CUR) {
+    f->off = f->off + n;
+  }
+  else if(seek == SEEK_END) {
+    f->off = f->ip->size + n;
+  }
+  return f->off;
 }

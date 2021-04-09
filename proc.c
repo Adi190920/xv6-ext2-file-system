@@ -6,7 +6,10 @@
 #include "x86.h"
 #include "proc.h"
 #include "spinlock.h"
-
+#include "sleeplock.h"
+#include "fs.h"
+#include "file.h"
+#include "vfs.h"
 struct {
   struct spinlock lock;
   struct proc proc[NPROC];
@@ -243,7 +246,7 @@ exit(void)
   }
 
   begin_op();
-  iput(curproc->cwd);
+  curproc->cwd->file_type->iops->iput(curproc->cwd);
   end_op();
   curproc->cwd = 0;
 

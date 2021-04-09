@@ -9,6 +9,7 @@
 #include "spinlock.h"
 #include "sleeplock.h"
 #include "file.h"
+#include "vfs.h"
 
 struct devsw devsw[NDEV];
 struct {
@@ -74,7 +75,7 @@ fileclose(struct file *f)
     pipeclose(ff.pipe, ff.writable);
   else if(ff.type == FD_INODE){
     begin_op();
-    iput(ff.ip);
+    ff.ip->file_type->iops->iput(ff.ip);
     end_op();
   }
 }
@@ -84,9 +85,9 @@ int
 filestat(struct file *f, struct stat *st)
 {
   if(f->type == FD_INODE){
-    ilock(f->ip);
-    stati(f->ip, st);
-    iunlock(f->ip);
+    f->ip->file_type->iops->ilock(f->ip);
+    f->ip->file_type->iops->stati(f->ip, st);
+    f->ip->file_type->iops->iunlock(f->ip);
     return 0;
   }
   return -1;
@@ -103,10 +104,10 @@ fileread(struct file *f, char *addr, int n)
   if(f->type == FD_PIPE)
     return piperead(f->pipe, addr, n);
   if(f->type == FD_INODE){
-    ilock(f->ip);
-    if((r = readi(f->ip, addr, f->off, n)) > 0)
+    f->ip->file_type->iops->ilock(f->ip);
+    if((r =f->ip->file_type->iops->readi(f->ip, addr, f->off, n)) > 0)
       f->off += r;
-    iunlock(f->ip);
+    f->ip->file_type->iops->iunlock(f->ip);
     return r;
   }
   panic("fileread");
@@ -138,10 +139,10 @@ filewrite(struct file *f, char *addr, int n)
         n1 = max;
 
       begin_op();
-      ilock(f->ip);
-      if ((r = writei(f->ip, addr + i, f->off, n1)) > 0)
+      f->ip->file_type->iops->ilock(f->ip);
+      if ((r = f->ip->file_type->iops->writei(f->ip, addr + i, f->off, n1)) > 0)
         f->off += r;
-      iunlock(f->ip);
+      f->ip->file_type->iops->iunlock(f->ip);
       end_op();
 
       if(r < 0)
@@ -154,4 +155,3 @@ filewrite(struct file *f, char *addr, int n)
   }
   panic("filewrite");
 }
-

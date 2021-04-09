@@ -14,7 +14,7 @@
 #include "mmu.h"
 #include "proc.h"
 #include "x86.h"
-
+#include "vfs.h"
 static void consputc(int);
 
 static int panicked = 0;
@@ -238,14 +238,14 @@ consoleread(struct inode *ip, char *dst, int n)
   uint target;
   int c;
 
-  iunlock(ip);
+  ip->file_type->iops->iunlock(ip);
   target = n;
   acquire(&cons.lock);
   while(n > 0){
     while(input.r == input.w){
       if(myproc()->killed){
         release(&cons.lock);
-        ilock(ip);
+        ip->file_type->iops->ilock(ip);
         return -1;
       }
       sleep(&input.r, &cons.lock);
@@ -265,7 +265,7 @@ consoleread(struct inode *ip, char *dst, int n)
       break;
   }
   release(&cons.lock);
-  ilock(ip);
+  ip->file_type->iops->ilock(ip);
 
   return target - n;
 }
@@ -275,12 +275,12 @@ consolewrite(struct inode *ip, char *buf, int n)
 {
   int i;
 
-  iunlock(ip);
+  ip->file_type->iops->iunlock(ip);
   acquire(&cons.lock);
   for(i = 0; i < n; i++)
     consputc(buf[i] & 0xff);
   release(&cons.lock);
-  ilock(ip);
+  ip->file_type->iops->ilock(ip);
 
   return n;
 }
@@ -296,4 +296,3 @@ consoleinit(void)
 
   ioapicenable(IRQ_KBD, 0);
 }
-

@@ -185,6 +185,8 @@ UPROGS=\
 fs.img: mkfs README $(UPROGS)
 	./mkfs fs.img README $(UPROGS)
 
+ext2.img:
+	dd if=/dev/zero of=ext2.img count=10000
 -include *.d
 
 clean: 
@@ -219,9 +221,8 @@ QEMUGDB = $(shell if $(QEMU) -help | grep -q '^-gdb'; \
 ifndef CPUS
 CPUS := 2
 endif
-QEMUOPTS = -drive file=fs.img,index=1,media=disk,format=raw -drive file=xv6.img,index=0,media=disk,format=raw -smp $(CPUS) -m 512 $(QEMUEXTRA)
-
-qemu: fs.img xv6.img
+QEMUOPTS = -drive file=fs.img,index=1,media=disk,format=raw,if=ide  -drive file=xv6.img,index=0,media=disk,format=raw,if=ide -drive file=ext2.img,index=2,media=disk,format=raw,if=ide  -smp $(CPUS) -m 512 $(QEMUEXTRA)
+qemu: fs.img xv6.img ext2.img
 	$(QEMU) -serial mon:stdio $(QEMUOPTS)
 
 qemu-memfs: xv6memfs.img

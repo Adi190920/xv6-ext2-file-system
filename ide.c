@@ -32,15 +32,16 @@ static struct spinlock idelock;
 static struct buf *idequeue;
 
 static int havedisk1;
+static int havedisk2;
 static void idestart(struct buf*);
 
 // Wait for IDE disk to become ready.
 static int
-idewait(int checkerr)
+idewait(int checkerr, int portno)
 {
   int r;
 
-  while(((r = inb(0x1f7)) & (IDE_BSY|IDE_DRDY)) != IDE_DRDY)
+  while(((r = inb(portno + 7)) & (IDE_BSY|IDE_DRDY)) != IDE_DRDY)
     ;
   if(checkerr && (r & (IDE_DF|IDE_ERR)) != 0)
     return -1;
@@ -54,7 +55,8 @@ ideinit(void)
 
   initlock(&idelock, "ide");
   ioapicenable(IRQ_IDE, ncpu - 1);
-  idewait(0);
+  // idewait(0);
+  ioapicenable(IRQ_IDE + 1, ncpu - 1);
 
   // Check if disk 1 is present
   outb(0x1f6, 0xe0 | (1<<4));
@@ -64,7 +66,13 @@ ideinit(void)
       break;
     }
   }
-
+  outb(0x176, 0xe0 | (2<<4));
+  for(i=0; i<1000; i++){
+    if(inb(0x177) != 0){
+      havedisk2 = 1;
+      break;
+    }
+  }
   // Switch back to disk 0.
   outb(0x1f6, 0xe0 | (0<<4));
 }
@@ -73,6 +81,7 @@ ideinit(void)
 static void
 idestart(struct buf *b)
 {
+  int portno;
   if(b == 0)
     panic("idestart");
   if(b->blockno >= FSSIZE)
@@ -83,30 +92,49 @@ idestart(struct buf *b)
   int write_cmd = (sector_per_block == 1) ? IDE_CMD_WRITE : IDE_CMD_WRMUL;
 
   if (sector_per_block > 7) panic("idestart");
-
-  idewait(0);
-  outb(0x3f6, 0);  // generate interrupt
-  outb(0x1f2, sector_per_block);  // number of sectors
-  outb(0x1f3, sector & 0xff);
-  outb(0x1f4, (sector >> 8) & 0xff);
-  outb(0x1f5, (sector >> 16) & 0xff);
-  outb(0x1f6, 0xe0 | ((b->dev&1)<<4) | ((sector>>24)&0x0f));
+  if(b->dev == 1)
+    portno = 0x1f0;
+  else
+    portno = 0x170;
+  idewait(0, portno);
+  // outb(0x3f6, 0);  // generate interrupt
+  // outb(0x1f2, sector_per_block);  // number of sectors
+  // outb(0x1f3, sector & 0xff);
+  // outb(0x1f4, (sector >> 8) & 0xff);
+  // outb(0x1f5, (sector >> 16) & 0xff);
+  // outb(0x1f6, 0xe0 | ((b->dev&1)<<4) | ((sector>>24)&0x0f));
+  if(b->dev == 1)
+    outb(0x3f6, 0); // generate interrupt
+  else
+    outb(0x376, 0); // generate interrupt
+  outb(portno + 2, sector_per_block); // number of sectors
+  outb(portno + 3, sector & 0xff);
+  outb(portno + 4, (sector >> 8) & 0xff);
+  outb(portno + 5, (sector >> 16) & 0xff);
+  outb(portno + 6, 0xe0 | ((b->dev&1)<<4) | ((sector>>24)&0x0f));
   if(b->flags & B_DIRTY){
-    outb(0x1f7, write_cmd);
-    outsl(0x1f0, b->data, BSIZE/4);
+    // outb(0x1f7, write_cmd);
+    // outsl(0x1f0, b->data, BSIZE/4);
+    outb(portno + 7, write_cmd);
+    outsl(portno, b->data, BSIZE/4);
   } else {
-    outb(0x1f7, read_cmd);
+    // outb(0x1f7, read_cmd);
+    outb(portno + 7, read_cmd);
   }
 }
 
 // Interrupt handler.
 void
-ideintr(void)
+ideintr(int flag)
 {
   struct buf *b;
-
+  int portno;
   // First queued buffer is the active request.
   acquire(&idelock);
+  if(flag == 0)
+    portno = 0x1f0;
+  else
+    portno = 0x170;
 
   if((b = idequeue) == 0){
     release(&idelock);
@@ -115,8 +143,8 @@ ideintr(void)
   idequeue = b->qnext;
 
   // Read data if needed.
-  if(!(b->flags & B_DIRTY) && idewait(1) >= 0)
-    insl(0x1f0, b->data, BSIZE/4);
+  if(!(b->flags & B_DIRTY) && idewait(1, portno) >= 0)
+    insl(portno, b->data, BSIZE/4);
 
   // Wake process waiting for this buf.
   b->flags |= B_VALID;
@@ -145,7 +173,8 @@ iderw(struct buf *b)
     panic("iderw: nothing to do");
   if(b->dev != 0 && !havedisk1)
     panic("iderw: ide disk 1 not present");
-
+  if(b->dev != 0 && !havedisk2)
+    panic("iderw: ide disk 2 not present");
   acquire(&idelock);  //DOC:acquire-lock
 
   // Append b to idequeue.

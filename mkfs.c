@@ -127,6 +127,12 @@ main(int argc, char *argv[])
   strcpy(de.name, "..");
   iappend(rootino, &de, sizeof(de));
 
+  //create mnt dirrectory
+  uint mnt_inode = ialloc(T_DIR); 
+  bzero(&de, sizeof(de));
+  de.inum = xshort(mnt_inode);
+  strcpy(de.name, "mnt");
+  iappend(rootino, &de, sizeof(de));
   for(i = 2; i < argc; i++){
     assert(index(argv[i], '/') == 0);
 

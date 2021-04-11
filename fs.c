@@ -1,9 +1,9 @@
 // File system implementation.  Five layers:
-//   + Blocks: allocator for raw disk blocks.
-//   + Log: crash recovery for multi-step updates.
-//   + Files: inode allocator, reading, writing, metadata.
-//   + Directories: inode with special contents (list of other inodes!)
-//   + Names: paths like /usr/rtm/xv6/fs.c for convenient naming.
+//    Blocks: allocator for raw disk blocks.
+//    Log: crash recovery for multi-step updates.
+//    Files: inode allocator, reading, writing, metadata.
+//    Directories: inode with special contents (list of other inodes!)
+//    Names: paths like /usr/rtm/xv6/fs.c for convenient naming.
 //
 // This file contains the low-level file system manipulation
 // routines.  The (higher-level) system call implementations
@@ -22,37 +22,37 @@
 #include "buf.h"
 #include "file.h"
 
+#include "ext2.h"
 
-
-static uint   inbuiltfs_balloc( uint dev );
-static void   inbuiltfs_bfree( int dev , uint b );
-static uint   inbuiltfs_bmap( struct inode * ip , uint bn );
-static void inbuiltfs_itrunc(struct inode*);
+static uint   balloc( uint dev );
+static void   bfree( int dev , uint b );
+static uint   bmap( struct inode * ip , uint bn );
+static void   itrunc(struct inode*);
 
 
 struct inode_operations inbuiltfs_iops =  {
-  .dirlookup  =   &inbuiltfs_dirlookup,
-  .iupdate    =   &inbuiltfs_iupdate,
-  .iput       =   &inbuiltfs_iput,
-  .itrunc     =   &inbuiltfs_itrunc,
-  // .cleanup    =   &inbuiltfs_cleanup,
-  .bmap       =   &inbuiltfs_bmap,
-  .ilock      =   &inbuiltfs_ilock,
-  .iunlock    =   &inbuiltfs_iunlock,
-  .iunlockput =   &inbuiltfs_iunlockput,
-  .stati      =   &inbuiltfs_stati,
-  .readi      =   &inbuiltfs_readi,
-  .writei     =   &inbuiltfs_writei,
-  .dirlink    =   &inbuiltfs_dirlink,
-  // .unlink     =   &inbuiltfs_unlink,
-  // .isdirempty =   &inbuiltfs_isdirempty,
-  // .iinit      =   &inbuiltfs_iinit,
-  // .getroot    =   &inbuiltfs_getroot,
-  // .readsb     =   &inbuiltfs_readsb,   
-  .ialloc     =   &inbuiltfs_ialloc,
-  .balloc     =   &inbuiltfs_balloc,
-  .bfree      =   &inbuiltfs_bfree,
-  .namecmp    =   &inbuiltfs_namecmp
+  .dirlookup  =   &dirlookup,
+  .iupdate    =   &iupdate,
+  .iput       =   &iput,
+  .itrunc     =   &itrunc,
+  // .cleanup    =   &cleanup,
+  .bmap       =   &bmap,
+  .ilock      =   &ilock,
+  .iunlock    =   &iunlock,
+  .iunlockput =   &iunlockput,
+  .stati      =   &stati,
+  .readi      =   &readi,
+  .writei     =   &writei,
+  .dirlink    =   &dirlink,
+  // .unlink     =   &unlink,
+  // .isdirempty =   &isdirempty,
+  // .iinit      =   &iinit,
+  // .getroot    =   &getroot,
+  // .readsb     =   &readsb,   
+  .ialloc     =   &ialloc,
+  .balloc     =   &balloc,
+  .bfree      =   &bfree,
+  .namecmp    =   &namecmp
 };
 
 struct filesystem_type inbuiltfs = {
@@ -60,7 +60,7 @@ struct filesystem_type inbuiltfs = {
   .iops = &inbuiltfs_iops,
 };
 #define min(a, b) ((a) < (b) ? (a) : (b))
-static void inbuiltfs_itrunc(struct inode*);
+static void itrunc(struct inode*);
 // there should be one superblock per disk device, but we run with
 // only one device
 struct superblock sb; 
@@ -75,7 +75,15 @@ readsb(int dev, struct superblock *sb)
   memmove(sb, bp->data, sizeof(*sb));
   brelse(bp);
 }
+void
+ext2_readsb(int dev, struct ext2_superblock *sb)
+{
+  struct buf *bp;
 
+  bp = bread(dev, 0);
+  memmove(sb, bp->data + 1024, sizeof(*sb));
+  brelse(bp);
+}
 // Zero a block.
 static void
 bzero(int dev, int bno)
@@ -92,7 +100,7 @@ bzero(int dev, int bno)
 
 // Allocate a zeroed disk block.
 static uint
-inbuiltfs_balloc(uint dev)
+balloc(uint dev)
 {
   int b, bi, m;
   struct buf *bp;
@@ -117,7 +125,7 @@ inbuiltfs_balloc(uint dev)
 
 // Free a disk block.
 static void
-inbuiltfs_bfree(int dev, uint b)
+bfree(int dev, uint b)
 {
   struct buf *bp;
   int bi, m;
@@ -223,6 +231,16 @@ iinit(int dev)
           sb.bmapstart);
 }
 
+struct ext2_superblock exs;
+
+void ext2_iinit(int dev){
+	ext2_readsb(dev, &exs);
+  	cprintf("ext2_sb: magic %x icount = %d bcount = %d\n log block size  %d inodes per group  %d first inode %d \
+		inode size %d\n", exs.s_magic, exs.s_inodes_count, exs.s_blocks_count, \
+		exs.s_log_block_size, exs.s_inodes_per_group, exs.s_first_ino, exs.s_inode_size);
+
+}
+
 static struct inode* iget(uint dev, uint inum);
 
 //PAGEBREAK!
@@ -230,7 +248,7 @@ static struct inode* iget(uint dev, uint inum);
 // Mark it as allocated by  giving it type type.
 // Returns an unlocked but allocated and referenced inode.
 struct inode*
-inbuiltfs_ialloc(uint dev, short type)
+ialloc(uint dev, short type)
 {
   int inum;
   struct buf *bp;
@@ -256,7 +274,7 @@ inbuiltfs_ialloc(uint dev, short type)
 // that lives on disk, since i-node cache is write-through.
 // Caller must hold ip->lock.
 void
-inbuiltfs_iupdate(struct inode *ip)
+iupdate(struct inode *ip)
 {
   struct buf *bp;
   struct dinode *dip;
@@ -325,7 +343,7 @@ idup(struct inode *ip)
 // Lock the given inode.
 // Reads the inode from disk if necessary.
 void
-inbuiltfs_ilock(struct inode *ip)
+ilock(struct inode *ip)
 {
   struct buf *bp;
   struct dinode *dip;
@@ -348,14 +366,14 @@ inbuiltfs_ilock(struct inode *ip)
     brelse(bp);
     ip->valid = 1;
     if(ip->type == 0)
-      panic("inbuiltfs_ilock: no type");
+      panic("ilock: no type");
   }
 }
 
 
 // Unlock the given inode.
 void
-inbuiltfs_iunlock(struct inode *ip)
+iunlock(struct inode *ip)
 {
   if(ip == 0 || !holdingsleep(&ip->lock) || ip->ref < 1)
     panic("iunlock");
@@ -372,7 +390,7 @@ inbuiltfs_iunlock(struct inode *ip)
 // All calls to iput() must be inside a transaction in
 // case it has to free the inode.
 void
-inbuiltfs_iput(struct inode *ip)
+iput(struct inode *ip)
 {
   acquiresleep(&ip->lock);
   if(ip->valid && ip->nlink == 0){
@@ -381,9 +399,9 @@ inbuiltfs_iput(struct inode *ip)
     release(&icache.lock);
     if(r == 1){
       // inode has no links and no other references: truncate and free.
-      inbuiltfs_itrunc(ip);
+      ip->file_type->iops->itrunc(ip);
       ip->type = 0;
-      inbuiltfs_iupdate(ip);
+      ip->file_type->iops->iupdate(ip);
       ip->valid = 0;
       ip->file_type = 0;
     }
@@ -398,10 +416,10 @@ inbuiltfs_iput(struct inode *ip)
 
 // Common idiom: unlock, then put.
 void
-inbuiltfs_iunlockput(struct inode *ip)
+iunlockput(struct inode *ip)
 {
-  inbuiltfs_iunlock(ip);
-  inbuiltfs_iput(ip);
+  ip->file_type->iops->iunlock(ip);
+  ip->file_type->iops->iput(ip);
 }
 
 
@@ -416,7 +434,7 @@ inbuiltfs_iunlockput(struct inode *ip)
 // Return the disk block address of the nth block in inode ip.
 // If there is no such block, bmap allocates one.
 static uint
-inbuiltfs_bmap(struct inode *ip, uint bn)
+bmap(struct inode *ip, uint bn)
 {
   uint addr, *a;
   struct buf *bp;
@@ -452,7 +470,7 @@ inbuiltfs_bmap(struct inode *ip, uint bn)
 // and has no in-memory reference to it (is
 // not an open file or current directory).
 static void
-inbuiltfs_itrunc(struct inode *ip)
+itrunc(struct inode *ip)
 {
   int i, j;
   struct buf *bp;
@@ -484,7 +502,7 @@ inbuiltfs_itrunc(struct inode *ip)
 // Copy stat information from inode.
 // Caller must hold ip->lock.
 void
-inbuiltfs_stati(struct inode *ip, struct stat *st)
+stati(struct inode *ip, struct stat *st)
 {
   st->dev = ip->dev;
   st->ino = ip->inum;
@@ -497,7 +515,7 @@ inbuiltfs_stati(struct inode *ip, struct stat *st)
 // Read data from inode.
 // Caller must hold ip->lock.
 int
-inbuiltfs_readi(struct inode *ip, char *dst, uint off, uint n)
+readi(struct inode *ip, char *dst, uint off, uint n)
 {
   uint tot, m;
   struct buf *bp;
@@ -526,7 +544,7 @@ inbuiltfs_readi(struct inode *ip, char *dst, uint off, uint n)
 // Write data to inode.
 // Caller must hold ip->lock.
 int
-inbuiltfs_writei(struct inode *ip, char *src, uint off, uint n)
+writei(struct inode *ip, char *src, uint off, uint n)
 {
   uint tot, m;
   struct buf *bp;
@@ -561,7 +579,7 @@ inbuiltfs_writei(struct inode *ip, char *src, uint off, uint n)
 // Directories
 
 int
-inbuiltfs_namecmp(const char *s, const char *t)
+namecmp(const char *s, const char *t)
 {
   return strncmp(s, t, DIRSIZ);
 }
@@ -569,17 +587,17 @@ inbuiltfs_namecmp(const char *s, const char *t)
 // Look for a directory entry in a directory.
 // If found, set *poff to byte offset of entry.
 struct inode*
-inbuiltfs_dirlookup(struct inode *dp, char *name, uint *poff)
+dirlookup(struct inode *dp, char *name, uint *poff)
 {
   uint off, inum;
   struct dirent de;
 
   if(dp->type != T_DIR)
-    panic("inbuiltfs_dirlookup not DIR");
+    panic("dirlookup not DIR");
 
   for(off = 0; off < dp->size; off += sizeof(de)){
     if(dp->file_type->iops->readi(dp, (char*)&de, off, sizeof(de)) != sizeof(de))
-      panic("inbuiltfs_dirlookup read");
+      panic("dirlookup read");
     if(de.inum == 0)
       continue;
     if(dp->file_type->iops->namecmp(name, de.name) == 0){
@@ -596,7 +614,7 @@ inbuiltfs_dirlookup(struct inode *dp, char *name, uint *poff)
 
 // Write a new directory entry (name, inum) into the directory dp.
 int
-inbuiltfs_dirlink(struct inode *dp, char *name, uint inum)
+dirlink(struct inode *dp, char *name, uint inum)
 {
   int off;
   struct dirent de;

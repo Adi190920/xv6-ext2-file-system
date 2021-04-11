@@ -7,9 +7,11 @@
 #include "proc.h"
 #include "spinlock.h"
 #include "sleeplock.h"
+#include "ext2.h"
 #include "fs.h"
 #include "file.h"
 #include "vfs.h"
+
 struct {
   struct spinlock lock;
   struct proc proc[NPROC];
@@ -410,6 +412,7 @@ forkret(void)
     first = 0;
     iinit(ROOTDEV);
     initlog(ROOTDEV);
+    ext2_iinit(EXT2DEV);
   }
 
   // Return to "caller", actually trapret (see allocproc).

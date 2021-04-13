@@ -17,13 +17,14 @@
 #include "proc.h"
 #include "spinlock.h"
 #include "sleeplock.h"
-#include "vfs.h"
+#include "ext2.h"
 #include "fs.h"
+#include "vfs.h"
 #include "buf.h"
 #include "file.h"
 
-#include "ext2.h"
-
+extern struct ext2_fs ext2fs[NINODE]; 
+extern struct inode_operations ext2fs_iops;
 static uint   balloc( uint dev );
 static void   bfree( int dev , uint b );
 static uint   bmap( struct inode * ip , uint bn );
@@ -55,10 +56,11 @@ struct inode_operations inbuiltfs_iops =  {
   .namecmp    =   &namecmp
 };
 
-struct filesystem_type inbuiltfs = {
-  .name = "inbuiltfs",
-  .iops = &inbuiltfs_iops,
-};
+struct fs inbuiltfs[NINODE];
+// = {
+//   .name = "inbuiltfs",
+//   .iops = &inbuiltfs_iops,
+// };
 #define min(a, b) ((a) < (b) ? (a) : (b))
 static void itrunc(struct inode*);
 // there should be one superblock per disk device, but we run with
@@ -75,15 +77,7 @@ readsb(int dev, struct superblock *sb)
   memmove(sb, bp->data, sizeof(*sb));
   brelse(bp);
 }
-void
-ext2_readsb(int dev, struct ext2_superblock *sb)
-{
-  struct buf *bp;
 
-  bp = bread(dev, 0);
-  memmove(sb, bp->data + 1024, sizeof(*sb));
-  brelse(bp);
-}
 // Zero a block.
 static void
 bzero(int dev, int bno)
@@ -223,7 +217,11 @@ iinit(int dev)
   for(i = 0; i < NINODE; i++) {
     initsleeplock(&icache.inode[i].lock, "inode");
   }
-
+  for(i = 0; i < NINODE; i++){
+    inbuiltfs[i].busy = 0;
+    inbuiltfs->iops = &inbuiltfs_iops;
+    memmove(inbuiltfs->name, "inbuiltfs", 10);
+  }
   readsb(dev, &sb);
   cprintf("sb: size %d nblocks %d ninodes %d nlog %d logstart %d\
  inodestart %d bmap start %d\n", sb.size, sb.nblocks,
@@ -231,15 +229,6 @@ iinit(int dev)
           sb.bmapstart);
 }
 
-struct ext2_superblock exs;
-
-void ext2_iinit(int dev){
-	ext2_readsb(dev, &exs);
-  	cprintf("ext2_sb: magic %x icount = %d bcount = %d\n log block size  %d inodes per group  %d first inode %d \
-		inode size %d\n", exs.s_magic, exs.s_inodes_count, exs.s_blocks_count, \
-		exs.s_log_block_size, exs.s_inodes_per_group, exs.s_first_ino, exs.s_inode_size);
-
-}
 
 static struct inode* iget(uint dev, uint inum);
 
@@ -278,7 +267,7 @@ iupdate(struct inode *ip)
 {
   struct buf *bp;
   struct dinode *dip;
-
+  struct fs *fs;
   bp = bread(ip->dev, IBLOCK(ip->inum, sb));
   dip = (struct dinode*)bp->data + ip->inum%IPB;
   dip->type = ip->type;
@@ -286,7 +275,8 @@ iupdate(struct inode *ip)
   dip->minor = ip->minor;
   dip->nlink = ip->nlink;
   dip->size = ip->size;
-  memmove(dip->addrs, ip->addrs, sizeof(ip->addrs));
+  fs = (struct fs *)ip->fs_type;
+  memmove(dip->addrs, fs->addrs, sizeof(fs->addrs));
   log_write(bp);
   brelse(bp);
 }
@@ -298,34 +288,54 @@ static struct inode*
 iget(uint dev, uint inum)
 {
   struct inode *ip, *empty;
-
+  int i = 0, j = 0;
   acquire(&icache.lock);
-
   // Is the inode already cached?
   empty = 0;
   for(ip = &icache.inode[0]; ip < &icache.inode[NINODE]; ip++){
     if(ip->ref > 0 && ip->dev == dev && ip->inum == inum){
       ip->ref++;
-      ip->file_type = &inbuiltfs;
+      // if(dev == EXT2DEV)
+      //   ip->fs_type = (void*)&ext2fs;
+      // else
+      //   ip->fs_type = (void*)&inbuiltfs;
       release(&icache.lock);
+      // cprintf("%d-dev\n", dev);
       return ip;
     }
     if(empty == 0 && ip->ref == 0)    // Remember empty slot.
       empty = ip;
   }
-
+  
   // Recycle an inode cache entry.
   if(empty == 0)
     panic("iget: no inodes");
-
+  for(i = 0; i < NINODE; i++){
+    if(inbuiltfs[i].busy == 0){
+      break;
+    }
+  }
+  for(j = 0; j < NINODE; j++){
+    if(ext2fs[j].busy == 0){
+      break;
+    }
+  }
   ip = empty;
   ip->dev = dev;
   ip->inum = inum;
   ip->ref = 1;
   ip->valid = 0;
-  ip->file_type = &inbuiltfs;
+  if(dev == EXT2DEV){
+    ip->fs_type = (void*)&ext2fs[j];
+    ext2fs[j].busy = 1;
+  }
+  else{
+    // cprintf("iget here");
+    ip->fs_type = (void*)&inbuiltfs[i];
+    inbuiltfs[i].busy = 1;
+  }
   release(&icache.lock);
-
+  cprintf("ip->num -%d", ip->inum);
   return ip;
 }
 
@@ -344,15 +354,14 @@ idup(struct inode *ip)
 // Reads the inode from disk if necessary.
 void
 ilock(struct inode *ip)
-{
+{  
   struct buf *bp;
   struct dinode *dip;
-
+  struct fs *fs;
   if(ip == 0 || ip->ref < 1)
     panic("ilock");
-
   acquiresleep(&ip->lock);
-
+  fs = (struct fs *)ip->fs_type;
   if(ip->valid == 0){
     bp = bread(ip->dev, IBLOCK(ip->inum, sb));
     dip = (struct dinode*)bp->data + ip->inum%IPB;
@@ -361,8 +370,7 @@ ilock(struct inode *ip)
     ip->minor = dip->minor;
     ip->nlink = dip->nlink;
     ip->size = dip->size;
-    ip->file_type = &inbuiltfs;
-    memmove(ip->addrs, dip->addrs, sizeof(ip->addrs));
+    memmove(fs->addrs, dip->addrs, sizeof(fs->addrs));
     brelse(bp);
     ip->valid = 1;
     if(ip->type == 0)
@@ -392,6 +400,8 @@ iunlock(struct inode *ip)
 void
 iput(struct inode *ip)
 {
+  struct fs *fs;
+  fs = (struct fs*)ip->fs_type;
   acquiresleep(&ip->lock);
   if(ip->valid && ip->nlink == 0){
     acquire(&icache.lock);
@@ -399,11 +409,12 @@ iput(struct inode *ip)
     release(&icache.lock);
     if(r == 1){
       // inode has no links and no other references: truncate and free.
-      ip->file_type->iops->itrunc(ip);
+      fs->iops->itrunc(ip);
       ip->type = 0;
-      ip->file_type->iops->iupdate(ip);
+      fs->iops->iupdate(ip);
       ip->valid = 0;
-      ip->file_type = 0;
+      fs->busy = 0;
+      ip->fs_type = 0;
     }
   }
   releasesleep(&ip->lock);
@@ -418,8 +429,10 @@ iput(struct inode *ip)
 void
 iunlockput(struct inode *ip)
 {
-  ip->file_type->iops->iunlock(ip);
-  ip->file_type->iops->iput(ip);
+  struct fs *fs;
+  fs = (struct fs*)ip->fs_type;
+  fs->iops->iunlock(ip);
+  fs->iops->iput(ip);
 }
 
 
@@ -438,22 +451,23 @@ bmap(struct inode *ip, uint bn)
 {
   uint addr, *a;
   struct buf *bp;
-
+  struct fs *fs;
+  fs = (struct fs*)ip->fs_type;
   if(bn < NDIRECT){
-    if((addr = ip->addrs[bn]) == 0)
-      ip->addrs[bn] = addr = ip->file_type->iops->balloc(ip->dev);
+    if((addr = fs->addrs[bn]) == 0)
+      fs->addrs[bn] = addr = fs->iops->balloc(ip->dev);
     return addr;
   }
   bn -= NDIRECT;
 
   if(bn < NINDIRECT){
     // Load indirect block, allocating if necessary.
-    if((addr = ip->addrs[NDIRECT]) == 0)
-      ip->addrs[NDIRECT] = addr = ip->file_type->iops->balloc(ip->dev);
+    if((addr = fs->addrs[NDIRECT]) == 0)
+      fs->addrs[NDIRECT] = addr = fs->iops->balloc(ip->dev);
     bp = bread(ip->dev, addr);
     a = (uint*)bp->data;
     if((addr = a[bn]) == 0){
-      a[bn] = addr = ip->file_type->iops->balloc(ip->dev);
+      a[bn] = addr = fs->iops->balloc(ip->dev);
       log_write(bp);
     }
     brelse(bp);
@@ -475,28 +489,29 @@ itrunc(struct inode *ip)
   int i, j;
   struct buf *bp;
   uint *a;
-
+  struct fs *fs;
+  fs = (struct fs*)ip->fs_type;
   for(i = 0; i < NDIRECT; i++){
-    if(ip->addrs[i]){
-      ip->file_type->iops->bfree(ip->dev, ip->addrs[i]);
-      ip->addrs[i] = 0;
+    if(fs->addrs[i]){
+      fs->iops->bfree(ip->dev, fs->addrs[i]);
+      fs->addrs[i] = 0;
     }
   }
 
-  if(ip->addrs[NDIRECT]){
-    bp = bread(ip->dev, ip->addrs[NDIRECT]);
+  if(fs->addrs[NDIRECT]){
+    bp = bread(ip->dev, fs->addrs[NDIRECT]);
     a = (uint*)bp->data;
     for(j = 0; j < NINDIRECT; j++){
       if(a[j])
-        ip->file_type->iops->bfree(ip->dev, a[j]);
+        fs->iops->bfree(ip->dev, a[j]);
     }
     brelse(bp);
-    ip->file_type->iops->bfree(ip->dev, ip->addrs[NDIRECT]);
-    ip->addrs[NDIRECT] = 0;
+    fs->iops->bfree(ip->dev, fs->addrs[NDIRECT]);
+    fs->addrs[NDIRECT] = 0;
   }
 
   ip->size = 0;
-  ip->file_type->iops->iupdate(ip);
+  fs->iops->iupdate(ip);
 }
 
 // Copy stat information from inode.
@@ -519,7 +534,8 @@ readi(struct inode *ip, char *dst, uint off, uint n)
 {
   uint tot, m;
   struct buf *bp;
-
+  struct fs *fs;
+  fs = (struct fs*)ip->fs_type;
   if(ip->type == T_DEV){
     if(ip->major < 0 || ip->major >= NDEV || !devsw[ip->major].read)
       return -1;
@@ -532,7 +548,7 @@ readi(struct inode *ip, char *dst, uint off, uint n)
     n = ip->size - off;
 
   for(tot=0; tot<n; tot+=m, off+=m, dst+=m){
-    bp = bread(ip->dev, ip->file_type->iops->bmap(ip, off/BSIZE));
+    bp = bread(ip->dev, fs->iops->bmap(ip, off/BSIZE));
     m = min(n - tot, BSIZE - off%BSIZE);
     memmove(dst, bp->data + off%BSIZE, m);
     brelse(bp);
@@ -548,7 +564,8 @@ writei(struct inode *ip, char *src, uint off, uint n)
 {
   uint tot, m;
   struct buf *bp;
-
+  struct fs *fs;
+  fs = (struct fs*)ip->fs_type;
   if(ip->type == T_DEV){
     if(ip->major < 0 || ip->major >= NDEV || !devsw[ip->major].write)
       return -1;
@@ -561,7 +578,7 @@ writei(struct inode *ip, char *src, uint off, uint n)
     return -1;
 
   for(tot=0; tot<n; tot+=m, off+=m, src+=m){
-    bp = bread(ip->dev, ip->file_type->iops->bmap(ip, off/BSIZE));
+    bp = bread(ip->dev, fs->iops->bmap(ip, off/BSIZE));
     m = min(n - tot, BSIZE - off%BSIZE);
     memmove(bp->data + off%BSIZE, src, m);
     log_write(bp);
@@ -570,7 +587,7 @@ writei(struct inode *ip, char *src, uint off, uint n)
 
   if(n > 0 && off > ip->size){
     ip->size = off;
-    ip->file_type->iops->iupdate(ip);
+    fs->iops->iupdate(ip);
   }
   return n;
 }
@@ -591,16 +608,17 @@ dirlookup(struct inode *dp, char *name, uint *poff)
 {
   uint off, inum;
   struct dirent de;
-
+  struct fs *fs;
+  fs = (struct fs*)dp->fs_type;
   if(dp->type != T_DIR)
     panic("dirlookup not DIR");
 
   for(off = 0; off < dp->size; off += sizeof(de)){
-    if(dp->file_type->iops->readi(dp, (char*)&de, off, sizeof(de)) != sizeof(de))
+    if(fs->iops->readi(dp, (char*)&de, off, sizeof(de)) != sizeof(de))
       panic("dirlookup read");
     if(de.inum == 0)
       continue;
-    if(dp->file_type->iops->namecmp(name, de.name) == 0){
+    if(fs->iops->namecmp(name, de.name) == 0){
       // entry matches path element
       if(poff)
         *poff = off;
@@ -619,16 +637,17 @@ dirlink(struct inode *dp, char *name, uint inum)
   int off;
   struct dirent de;
   struct inode *ip;
-
+  struct fs *fs;
+  fs = (struct fs*)dp->fs_type;
   // Check that name is not present.
-  if((ip = dp->file_type->iops->dirlookup(dp, name, 0)) != 0){
-    dp->file_type->iops->iput(ip);
+  if((ip = fs->iops->dirlookup(dp, name, 0)) != 0){
+    fs->iops->iput(ip);
     return -1;
   }
 
   // Look for an empty dirent.
   for(off = 0; off < dp->size; off += sizeof(de)){
-    if(dp->file_type->iops->readi(dp, (char*)&de, off, sizeof(de)) != sizeof(de))
+    if(fs->iops->readi(dp, (char*)&de, off, sizeof(de)) != sizeof(de))
       panic("dirlink read");
     if(de.inum == 0)
       break;
@@ -636,7 +655,7 @@ dirlink(struct inode *dp, char *name, uint inum)
 
   strncpy(de.name, name, DIRSIZ);
   de.inum = inum;
-  if(dp->file_type->iops->writei(dp, (char*)&de, off, sizeof(de)) != sizeof(de))
+  if(fs->iops->writei(dp, (char*)&de, off, sizeof(de)) != sizeof(de))
     panic("dirlink");
 
   return 0;
@@ -690,32 +709,38 @@ static struct inode*
 namex(char *path, int nameiparent, char *name)
 {
   struct inode *ip, *next;
-
+  struct fs *fs;
   if(*path == '/')
     ip = iget(ROOTDEV, ROOTINO);
-  else
+  else if(namecmp(path, "mnt") == 0){
+    // cprintf("%s", path);
+    ip = iget(EXT2DEV, EXT2_ROOT_INO);
+  }
+  else{
+    cprintf("%s ", path);
     ip = idup(myproc()->cwd);
-
+  }
+  fs = (struct fs*)ip->fs_type;
   while((path = skipelem(path, name)) != 0){
-    ip->file_type->iops->ilock(ip);
+    fs->iops->ilock(ip);
     if(ip->type != T_DIR){
-      ip->file_type->iops->iunlockput(ip);
+      fs->iops->iunlockput(ip);
       return 0;
     }
     if(nameiparent && *path == '\0'){
       // Stop one level early.
-      ip->file_type->iops->iunlock(ip);
+      fs->iops->iunlock(ip);
       return ip;
     }
-    if((next = ip->file_type->iops->dirlookup(ip, name, 0)) == 0){
-      ip->file_type->iops->iunlockput(ip);
+    if((next = fs->iops->dirlookup(ip, name, 0)) == 0){
+      fs->iops->iunlockput(ip);
       return 0;
     }
-    ip->file_type->iops->iunlockput(ip);
+    fs->iops->iunlockput(ip);
     ip = next;
   }
   if(nameiparent){
-    ip->file_type->iops->iput(ip);
+    fs->iops->iput(ip);
     return 0;
   }
   return ip;
@@ -725,6 +750,7 @@ struct inode*
 namei(char *path)
 {
   char name[DIRSIZ];
+  cprintf("namei ");
   return namex(path, 0, name);
 }
 

@@ -9,8 +9,10 @@
 #include "fs.h"
 #include "spinlock.h"
 #include "sleeplock.h"
+#include "ext2.h"
 #include "file.h"
 #include "vfs.h"
+
 
 extern char data[];  // defined by kernel.ld
 pde_t *kpgdir;  // for use in scheduler()
@@ -204,7 +206,8 @@ loaduvm(pde_t *pgdir, char *addr, struct inode *ip, uint offset, uint sz)
 {
   uint i, pa, n;
   pte_t *pte;
-
+  struct fs *fs;
+  fs = (struct fs*)ip->fs_type;
   if((uint) addr % PGSIZE != 0)
     panic("loaduvm: addr must be page aligned");
   for(i = 0; i < sz; i += PGSIZE){
@@ -215,7 +218,7 @@ loaduvm(pde_t *pgdir, char *addr, struct inode *ip, uint offset, uint sz)
       n = sz - i;
     else
       n = PGSIZE;
-    if(ip->file_type->iops->readi(ip, P2V(pa), offset+i, n) != n)
+    if(fs->iops->readi(ip, P2V(pa), offset+i, n) != n)
       return -1;
   }
   return 0;

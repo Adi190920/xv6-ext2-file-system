@@ -15,7 +15,9 @@
 #include "sleeplock.h"
 #include "file.h"
 #include "fcntl.h"
+#include "ext2.h"
 #include "vfs.h"
+
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
 static int
@@ -120,7 +122,7 @@ sys_link(void)
 {
   char name[DIRSIZ], *new, *old;
   struct inode *dp, *ip;
-
+  struct fs *fs, *fs1;
   if(argstr(0, &old) < 0 || argstr(1, &new) < 0)
     return -1;
 
@@ -129,37 +131,38 @@ sys_link(void)
     end_op();
     return -1;
   }
-
-  ip->file_type->iops->ilock(ip);
+  fs = (struct fs*)ip->fs_type;
+  fs->iops->ilock(ip);
   if(ip->type == T_DIR){
-    ip->file_type->iops->iunlockput(ip);
+    fs->iops->iunlockput(ip);
     end_op();
     return -1;
   }
 
   ip->nlink++;
-  ip->file_type->iops->iupdate(ip);
-  ip->file_type->iops->iunlock(ip);
+  fs->iops->iupdate(ip);
+  fs->iops->iunlock(ip);
 
   if((dp = nameiparent(new, name)) == 0)
     goto bad;
-  ip->file_type->iops->ilock(dp);
-  if(dp->dev != ip->dev || dp->file_type->iops->dirlink(dp, name, ip->inum) < 0){
-    ip->file_type->iops->iunlockput(dp);
+  fs1 = (struct fs*)dp->fs_type;
+  fs->iops->ilock(dp);
+  if(dp->dev != ip->dev || fs1->iops->dirlink(dp, name, ip->inum) < 0){
+    fs->iops->iunlockput(dp);
     goto bad;
   }
-  ip->file_type->iops->iunlockput(dp);
-  ip->file_type->iops->iput(ip);
+  fs->iops->iunlockput(dp);
+  fs->iops->iput(ip);
 
   end_op();
 
   return 0;
 
 bad:
-  ip->file_type->iops->ilock(ip);
+  fs->iops->ilock(ip);
   ip->nlink--;
-  ip->file_type->iops->iupdate(ip);
-  ip->file_type->iops->iunlockput(ip);
+  fs->iops->iupdate(ip);
+  fs->iops->iunlockput(ip);
   end_op();
   return -1;
 }
@@ -170,9 +173,10 @@ isdirempty(struct inode *dp)
 {
   int off;
   struct dirent de;
-
+  struct fs *fs;
+  fs = (struct fs*)dp->fs_type;
   for(off=2*sizeof(de); off<dp->size; off+=sizeof(de)){
-    if(dp->file_type->iops->readi(dp, (char*)&de, off, sizeof(de)) != sizeof(de))
+    if(fs->iops->readi(dp, (char*)&de, off, sizeof(de)) != sizeof(de))
       panic("isdirempty: readi");
     if(de.inum != 0)
       return 0;
@@ -188,7 +192,7 @@ sys_unlink(void)
   struct dirent de;
   char name[DIRSIZ], *path;
   uint off;
-
+  struct fs *fs, *fs1;
   if(argstr(0, &path) < 0)
     return -1;
 
@@ -197,43 +201,44 @@ sys_unlink(void)
     end_op();
     return -1;
   }
-
-  dp->file_type->iops->ilock(dp);
+  fs = (struct fs*)dp->fs_type;
+  fs->iops->ilock(dp);
 
   // Cannot unlink "." or "..".
-  if(dp->file_type->iops->namecmp(name, ".") == 0 || dp->file_type->iops->namecmp(name, "..") == 0)
+  if(fs->iops->namecmp(name, ".") == 0 || fs->iops->namecmp(name, "..") == 0)
     goto bad;
 
-  if((ip = dp->file_type->iops->dirlookup(dp, name, &off)) == 0)
+  if((ip = fs->iops->dirlookup(dp, name, &off)) == 0)
     goto bad;
-  ip->file_type->iops->ilock(ip);
+  fs1 = (struct fs*)ip->fs_type;
+  fs1->iops->ilock(ip);
 
   if(ip->nlink < 1)
     panic("unlink: nlink < 1");
   if(ip->type == T_DIR && !isdirempty(ip)){
-    ip->file_type->iops->iunlockput(ip);
+    fs1->iops->iunlockput(ip);
     goto bad;
   }
 
   memset(&de, 0, sizeof(de));
-  if(dp->file_type->iops->writei(dp, (char*)&de, off, sizeof(de)) != sizeof(de))
+  if(fs->iops->writei(dp, (char*)&de, off, sizeof(de)) != sizeof(de))
     panic("unlink: writei");
   if(ip->type == T_DIR){
     dp->nlink--;
-    dp->file_type->iops->iupdate(dp);
+    fs->iops->iupdate(dp);
   }
-  dp->file_type->iops->iunlockput(dp);
+  fs->iops->iunlockput(dp);
 
   ip->nlink--;
-  ip->file_type->iops->iupdate(ip);
-  ip->file_type->iops->iunlockput(ip);
+  fs1->iops->iupdate(ip);
+  fs1->iops->iunlockput(ip);
 
   end_op();
 
   return 0;
 
 bad:
-  dp->file_type->iops->iunlockput(dp);
+  fs->iops->iunlockput(dp);
   end_op();
   return -1;
 }
@@ -243,42 +248,42 @@ create(char *path, short type, short major, short minor)
 {
   struct inode *ip, *dp;
   char name[DIRSIZ];
-
+  struct fs *fs, *fs1;
   if((dp = nameiparent(path, name)) == 0)
     return 0;
-  dp->file_type->iops->ilock(dp);
+  fs = (struct fs*)dp->fs_type;
+  fs->iops->ilock(dp);
 
-  if((ip = dp->file_type->iops->dirlookup(dp, name, 0)) != 0){
-    dp->file_type->iops->iunlockput(dp);
-    dp->file_type->iops->ilock(ip);
+  if((ip = fs->iops->dirlookup(dp, name, 0)) != 0){
+    fs1 = (struct fs*)ip->fs_type;
+    fs->iops->iunlockput(dp);
+    fs->iops->ilock(ip);
     if(type == T_FILE && ip->type == T_FILE)
       return ip;
-    ip->file_type->iops->iunlockput(ip);
+    fs->iops->iunlockput(ip);
     return 0;
   }
-
-  if((ip = dp->file_type->iops->ialloc(dp->dev, type)) == 0)
+  cprintf("%d ", type);
+  if((ip = fs->iops->ialloc(dp->dev, type)) == 0)
     panic("create: ialloc");
-
-  ip->file_type->iops->ilock(ip);
+  fs1 = (struct fs*)ip->fs_type;
+  fs1->iops->ilock(ip);
   ip->major = major;
   ip->minor = minor;
   ip->nlink = 1;
-  ip->file_type->iops->iupdate(ip);
-
+  fs1->iops->iupdate(ip);
   if(type == T_DIR){  // Create . and .. entries.
     dp->nlink++;  // for ".."
-    dp->file_type->iops->iupdate(dp);
+    fs->iops->iupdate(dp);
     // No ip->nlink++ for ".": avoid cyclic ref count.
-    if(ip->file_type->iops->dirlink(ip, ".", ip->inum) < 0 || ip->file_type->iops->dirlink(ip, "..", dp->inum) < 0)
+    if(fs1->iops->dirlink(ip, ".", ip->inum) < 0 || fs1->iops->dirlink(ip, "..", dp->inum) < 0)
       panic("create dots");
   }
 
-  if(dp->file_type->iops->dirlink(dp, name, ip->inum) < 0)
+  if(fs->iops->dirlink(dp, name, ip->inum) < 0)
     panic("create: dirlink");
 
-  dp->file_type->iops->iunlockput(dp);
-
+  fs->iops->iunlockput(dp);
   return ip;
 }
 
@@ -289,10 +294,9 @@ sys_open(void)
   int fd, omode;
   struct file *f;
   struct inode *ip;
-
+  struct fs *fs;
   if(argstr(0, &path) < 0 || argint(1, &omode) < 0)
     return -1;
-
   begin_op();
 
   if(omode & O_CREATE){
@@ -301,27 +305,29 @@ sys_open(void)
       end_op();
       return -1;
     }
-  } else {
+  } 
+  else {
     if((ip = namei(path)) == 0){
       end_op();
       return -1;
     }
-    ip->file_type->iops->ilock(ip);
+    fs = (struct fs*)ip->fs_type;
+    fs->iops->ilock(ip);
     if(ip->type == T_DIR && omode != O_RDONLY){
-      ip->file_type->iops->iunlockput(ip);
+      fs->iops->iunlockput(ip);
       end_op();
       return -1;
     }
   }
-
+  fs = (struct fs*)ip->fs_type;
   if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
     if(f)
       fileclose(f);
-    ip->file_type->iops->iunlockput(ip);
+    fs->iops->iunlockput(ip);
     end_op();
     return -1;
   }
-  ip->file_type->iops->iunlock(ip);
+  fs->iops->iunlock(ip);
   end_op();
 
   f->type = FD_INODE;
@@ -337,13 +343,14 @@ sys_mkdir(void)
 {
   char *path;
   struct inode *ip;
-
+  struct fs *fs;
   begin_op();
   if(argstr(0, &path) < 0 || (ip = create(path, T_DIR, 0, 0)) == 0){
     end_op();
     return -1;
   }
-  ip->file_type->iops->iunlockput(ip);
+  fs = (struct fs*)ip->fs_type;
+  fs->iops->iunlockput(ip);
   end_op();
   return 0;
 }
@@ -354,7 +361,7 @@ sys_mknod(void)
   struct inode *ip;
   char *path;
   int major, minor;
-
+  struct fs *fs;
   begin_op();
   if((argstr(0, &path)) < 0 ||
      argint(1, &major) < 0 ||
@@ -363,7 +370,8 @@ sys_mknod(void)
     end_op();
     return -1;
   }
-  ip->file_type->iops->iunlockput(ip);
+  fs = (struct fs*)ip->fs_type;
+  fs->iops->iunlockput(ip);
   end_op();
   return 0;
 }
@@ -374,20 +382,21 @@ sys_chdir(void)
   char *path;
   struct inode *ip;
   struct proc *curproc = myproc();
-  
+  struct fs *fs;
   begin_op();
   if(argstr(0, &path) < 0 || (ip = namei(path)) == 0){
     end_op();
     return -1;
   }
-  ip->file_type->iops->ilock(ip);
+  fs = (struct fs*)ip->fs_type;
+  fs->iops->ilock(ip);
   if(ip->type != T_DIR){
-    ip->file_type->iops->iunlockput(ip);
+    fs->iops->iunlockput(ip);
     end_op();
     return -1;
   }
-  ip->file_type->iops->iunlock(ip);
-  ip->file_type->iops->iput(curproc->cwd);
+  fs->iops->iunlock(ip);
+  fs->iops->iput(curproc->cwd);
   end_op();
   curproc->cwd = ip;
   return 0;

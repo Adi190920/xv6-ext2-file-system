@@ -1,9 +1,16 @@
-#include"types.h"
-struct filesystem_type {
-  char * name;
-  struct inode_operations * iops;
-};
 
+struct ext2_fs {
+  char * name;
+  uint busy;
+  struct inode_operations * iops;
+  uint addrs[EXT2_N_BLOCKS];
+};
+struct fs {
+  char  name[10];
+  uint busy;
+  struct inode_operations * iops;
+  uint addrs[NDIRECT + 1];
+};
 
 struct inode_operations {
   struct inode * (* dirlookup )( struct inode * dp , char * name , uint * off );

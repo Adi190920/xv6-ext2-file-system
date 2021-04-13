@@ -9,6 +9,7 @@
 #include "spinlock.h"
 #include "sleeplock.h"
 #include "file.h"
+#include "ext2.h"
 #include "vfs.h"
 
 struct devsw devsw[NDEV];
@@ -58,7 +59,7 @@ void
 fileclose(struct file *f)
 {
   struct file ff;
-
+  struct fs *fs;
   acquire(&ftable.lock);
   if(f->ref < 1)
     panic("fileclose");
@@ -74,8 +75,9 @@ fileclose(struct file *f)
   if(ff.type == FD_PIPE)
     pipeclose(ff.pipe, ff.writable);
   else if(ff.type == FD_INODE){
+    fs = (struct fs*)ff.ip->fs_type;
     begin_op();
-    ff.ip->file_type->iops->iput(ff.ip);
+    fs->iops->iput(ff.ip);
     end_op();
   }
 }
@@ -84,10 +86,12 @@ fileclose(struct file *f)
 int
 filestat(struct file *f, struct stat *st)
 {
+  struct fs *fs;
   if(f->type == FD_INODE){
-    f->ip->file_type->iops->ilock(f->ip);
-    f->ip->file_type->iops->stati(f->ip, st);
-    f->ip->file_type->iops->iunlock(f->ip);
+    fs = (struct fs*)f->ip->fs_type;
+    fs->iops->ilock(f->ip);
+    fs->iops->stati(f->ip, st);
+    fs->iops->iunlock(f->ip);
     return 0;
   }
   return -1;
@@ -98,16 +102,17 @@ int
 fileread(struct file *f, char *addr, int n)
 {
   int r;
-
+  struct fs *fs;
+  fs = (struct fs*)f->ip->fs_type;
   if(f->readable == 0)
     return -1;
   if(f->type == FD_PIPE)
     return piperead(f->pipe, addr, n);
   if(f->type == FD_INODE){
-    f->ip->file_type->iops->ilock(f->ip);
-    if((r =f->ip->file_type->iops->readi(f->ip, addr, f->off, n)) > 0)
+    fs->iops->ilock(f->ip);
+    if((r =fs->iops->readi(f->ip, addr, f->off, n)) > 0)
       f->off += r;
-    f->ip->file_type->iops->iunlock(f->ip);
+    fs->iops->iunlock(f->ip);
     return r;
   }
   panic("fileread");
@@ -119,7 +124,8 @@ int
 filewrite(struct file *f, char *addr, int n)
 {
   int r;
-
+  struct fs *fs;
+  fs = (struct fs*)f->ip->fs_type;
   if(f->writable == 0)
     return -1;
   if(f->type == FD_PIPE)
@@ -139,10 +145,10 @@ filewrite(struct file *f, char *addr, int n)
         n1 = max;
 
       begin_op();
-      f->ip->file_type->iops->ilock(f->ip);
-      if ((r = f->ip->file_type->iops->writei(f->ip, addr + i, f->off, n1)) > 0)
+      fs->iops->ilock(f->ip);
+      if ((r = fs->iops->writei(f->ip, addr + i, f->off, n1)) > 0)
         f->off += r;
-      f->ip->file_type->iops->iunlock(f->ip);
+      fs->iops->iunlock(f->ip);
       end_op();
 
       if(r < 0)

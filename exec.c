@@ -9,6 +9,7 @@
 #include "fs.h"
 #include "spinlock.h"
 #include "sleeplock.h"
+#include "ext2.h"
 #include "file.h"
 #include "vfs.h"
 
@@ -23,7 +24,7 @@ exec(char *path, char **argv)
   struct proghdr ph;
   pde_t *pgdir, *oldpgdir;
   struct proc *curproc = myproc();
-
+  struct fs *fs;
   begin_op();
 
   if((ip = namei(path)) == 0){
@@ -31,11 +32,12 @@ exec(char *path, char **argv)
     cprintf("exec: fail\n");
     return -1;
   }
-  ip->file_type->iops->ilock(ip);
+  fs = (struct fs*)ip->fs_type;
+  fs->iops->ilock(ip);
   pgdir = 0;
 
   // Check ELF header
-  if(ip->file_type->iops->readi(ip, (char*)&elf, 0, sizeof(elf)) != sizeof(elf))
+  if(fs->iops->readi(ip, (char*)&elf, 0, sizeof(elf)) != sizeof(elf))
     goto bad;
   if(elf.magic != ELF_MAGIC)
     goto bad;
@@ -46,7 +48,7 @@ exec(char *path, char **argv)
   // Load program into memory.
   sz = 0;
   for(i=0, off=elf.phoff; i<elf.phnum; i++, off+=sizeof(ph)){
-    if(ip->file_type->iops->readi(ip, (char*)&ph, off, sizeof(ph)) != sizeof(ph))
+    if(fs->iops->readi(ip, (char*)&ph, off, sizeof(ph)) != sizeof(ph))
       goto bad;
     if(ph.type != ELF_PROG_LOAD)
       continue;
@@ -61,7 +63,7 @@ exec(char *path, char **argv)
     if(loaduvm(pgdir, (char*)ph.vaddr, ip, ph.off, ph.filesz) < 0)
       goto bad;
   }
-  ip->file_type->iops->iunlockput(ip);
+  fs->iops->iunlockput(ip);
   end_op();
   ip = 0;
 
@@ -112,7 +114,7 @@ exec(char *path, char **argv)
   if(pgdir)
     freevm(pgdir);
   if(ip){
-    ip->file_type->iops->iunlockput(ip);
+    fs->iops->iunlockput(ip);
     end_op();
   }
   return -1;

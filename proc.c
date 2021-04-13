@@ -7,8 +7,8 @@
 #include "proc.h"
 #include "spinlock.h"
 #include "sleeplock.h"
-#include "ext2.h"
 #include "fs.h"
+#include "ext2.h"
 #include "file.h"
 #include "vfs.h"
 
@@ -235,7 +235,7 @@ exit(void)
   struct proc *curproc = myproc();
   struct proc *p;
   int fd;
-
+  struct fs *fs;
   if(curproc == initproc)
     panic("init exiting");
 
@@ -246,9 +246,9 @@ exit(void)
       curproc->ofile[fd] = 0;
     }
   }
-
+  fs = (struct fs*)curproc->cwd->fs_type;
   begin_op();
-  curproc->cwd->file_type->iops->iput(curproc->cwd);
+  fs->iops->iput(curproc->cwd);
   end_op();
   curproc->cwd = 0;
 

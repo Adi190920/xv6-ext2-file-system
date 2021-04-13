@@ -22,9 +22,9 @@ struct inode {
   short minor;
   short nlink;
   uint size;
-  uint addrs[NDIRECT+1];
-
-  struct filesystem_type *file_type; 
+  // uint addrs[NDIRECT+1];
+  void *fs_type;
+  // struct filesystem_type *file_type; 
 };
 
 // table mapping major device number to

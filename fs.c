@@ -17,8 +17,8 @@
 #include "proc.h"
 #include "spinlock.h"
 #include "sleeplock.h"
-#include "vfs.h"
 #include "fs.h"
+#include "vfs.h"
 #include "buf.h"
 #include "file.h"
 
@@ -28,7 +28,7 @@ static uint   balloc( uint dev );
 static void   bfree( int dev , uint b );
 static uint   bmap( struct inode * ip , uint bn );
 static void   itrunc(struct inode*);
-
+// uint ext2_addrs[NINODE][EXT2_N_BLOCKS];
 
 struct inode_operations inbuiltfs_iops =  {
   .dirlookup  =   &dirlookup,
@@ -59,6 +59,7 @@ struct filesystem_type inbuiltfs = {
   .name = "inbuiltfs",
   .iops = &inbuiltfs_iops,
 };
+struct addrs addrs[NINODE];
 #define min(a, b) ((a) < (b) ? (a) : (b))
 static void itrunc(struct inode*);
 // there should be one superblock per disk device, but we run with
@@ -223,7 +224,9 @@ iinit(int dev)
   for(i = 0; i < NINODE; i++) {
     initsleeplock(&icache.inode[i].lock, "inode");
   }
-
+  // for(i = 0; i < NINODE; i++){
+  //   addrs[i].busy = 0;
+  // }
   readsb(dev, &sb);
   cprintf("sb: size %d nblocks %d ninodes %d nlog %d logstart %d\
  inodestart %d bmap start %d\n", sb.size, sb.nblocks,
@@ -278,7 +281,8 @@ iupdate(struct inode *ip)
 {
   struct buf *bp;
   struct dinode *dip;
-
+  struct addrs *ad;
+  ad = (struct addrs *)ip->addrs;
   bp = bread(ip->dev, IBLOCK(ip->inum, sb));
   dip = (struct dinode*)bp->data + ip->inum%IPB;
   dip->type = ip->type;
@@ -286,7 +290,7 @@ iupdate(struct inode *ip)
   dip->minor = ip->minor;
   dip->nlink = ip->nlink;
   dip->size = ip->size;
-  memmove(dip->addrs, ip->addrs, sizeof(ip->addrs));
+  memmove(dip->addrs, ad->addrs, sizeof(ad->addrs));
   log_write(bp);
   brelse(bp);
 }
@@ -298,7 +302,7 @@ static struct inode*
 iget(uint dev, uint inum)
 {
   struct inode *ip, *empty;
-
+  int i = 0;
   acquire(&icache.lock);
 
   // Is the inode already cached?
@@ -306,14 +310,17 @@ iget(uint dev, uint inum)
   for(ip = &icache.inode[0]; ip < &icache.inode[NINODE]; ip++){
     if(ip->ref > 0 && ip->dev == dev && ip->inum == inum){
       ip->ref++;
-      ip->file_type = &inbuiltfs;
+      // ip->file_type = &inbuiltfs;
       release(&icache.lock);
       return ip;
     }
     if(empty == 0 && ip->ref == 0)    // Remember empty slot.
       empty = ip;
   }
-
+  for(i = 0; i < NINODE; i++){
+    if(addrs[i].busy == 0)
+      break;
+  }
   // Recycle an inode cache entry.
   if(empty == 0)
     panic("iget: no inodes");
@@ -322,10 +329,11 @@ iget(uint dev, uint inum)
   ip->dev = dev;
   ip->inum = inum;
   ip->ref = 1;
-  ip->valid = 0;
+  ip->valid = 0; 
   ip->file_type = &inbuiltfs;
+  ip->addrs = (void *)&addrs[i];
+  addrs[i].busy = 1;
   release(&icache.lock);
-
   return ip;
 }
 
@@ -347,12 +355,11 @@ ilock(struct inode *ip)
 {
   struct buf *bp;
   struct dinode *dip;
-
+  struct addrs *ad;
   if(ip == 0 || ip->ref < 1)
     panic("ilock");
-
   acquiresleep(&ip->lock);
-
+  ad = (struct addrs *)ip->addrs;
   if(ip->valid == 0){
     bp = bread(ip->dev, IBLOCK(ip->inum, sb));
     dip = (struct dinode*)bp->data + ip->inum%IPB;
@@ -361,8 +368,8 @@ ilock(struct inode *ip)
     ip->minor = dip->minor;
     ip->nlink = dip->nlink;
     ip->size = dip->size;
-    ip->file_type = &inbuiltfs;
-    memmove(ip->addrs, dip->addrs, sizeof(ip->addrs));
+    ip->file_type = &inbuiltfs; 
+    memmove(ad->addrs, dip->addrs, sizeof(ad->addrs));
     brelse(bp);
     ip->valid = 1;
     if(ip->type == 0)
@@ -392,7 +399,9 @@ iunlock(struct inode *ip)
 void
 iput(struct inode *ip)
 {
+  struct addrs *ad;
   acquiresleep(&ip->lock);
+  ad = (struct addrs *)ip->addrs;
   if(ip->valid && ip->nlink == 0){
     acquire(&icache.lock);
     int r = ip->ref;
@@ -404,12 +413,18 @@ iput(struct inode *ip)
       ip->file_type->iops->iupdate(ip);
       ip->valid = 0;
       ip->file_type = 0;
+      // ad->busy = 0;
+      ip->addrs = 0;
     }
   }
+  
   releasesleep(&ip->lock);
-
   acquire(&icache.lock);
   ip->ref--;
+  if(ip->ref == 0){
+    ad->busy = 0;
+    ip->addrs = 0;
+  }
   release(&icache.lock);
 }
 
@@ -438,18 +453,19 @@ bmap(struct inode *ip, uint bn)
 {
   uint addr, *a;
   struct buf *bp;
-
+  struct addrs *ad;
+  ad = (struct addrs *)ip->addrs;
   if(bn < NDIRECT){
-    if((addr = ip->addrs[bn]) == 0)
-      ip->addrs[bn] = addr = ip->file_type->iops->balloc(ip->dev);
+    if((addr = ad->addrs[bn]) == 0)
+      ad->addrs[bn] = addr = ip->file_type->iops->balloc(ip->dev);
     return addr;
   }
   bn -= NDIRECT;
 
   if(bn < NINDIRECT){
     // Load indirect block, allocating if necessary.
-    if((addr = ip->addrs[NDIRECT]) == 0)
-      ip->addrs[NDIRECT] = addr = ip->file_type->iops->balloc(ip->dev);
+    if((addr = ad->addrs[NDIRECT]) == 0)
+      ad->addrs[NDIRECT] = addr = ip->file_type->iops->balloc(ip->dev);
     bp = bread(ip->dev, addr);
     a = (uint*)bp->data;
     if((addr = a[bn]) == 0){
@@ -475,24 +491,25 @@ itrunc(struct inode *ip)
   int i, j;
   struct buf *bp;
   uint *a;
-
+  struct addrs *ad;
+  ad = (struct addrs *)ip->addrs;
   for(i = 0; i < NDIRECT; i++){
-    if(ip->addrs[i]){
-      ip->file_type->iops->bfree(ip->dev, ip->addrs[i]);
-      ip->addrs[i] = 0;
+    if(ad->addrs[i]){
+      ip->file_type->iops->bfree(ip->dev, ad->addrs[i]);
+      ad->addrs[i] = 0;
     }
   }
 
-  if(ip->addrs[NDIRECT]){
-    bp = bread(ip->dev, ip->addrs[NDIRECT]);
+  if(ad->addrs[NDIRECT]){
+    bp = bread(ip->dev, ad->addrs[NDIRECT]);
     a = (uint*)bp->data;
     for(j = 0; j < NINDIRECT; j++){
       if(a[j])
         ip->file_type->iops->bfree(ip->dev, a[j]);
     }
     brelse(bp);
-    ip->file_type->iops->bfree(ip->dev, ip->addrs[NDIRECT]);
-    ip->addrs[NDIRECT] = 0;
+    ip->file_type->iops->bfree(ip->dev, ad->addrs[NDIRECT]);
+    ad->addrs[NDIRECT] = 0;
   }
 
   ip->size = 0;
@@ -591,15 +608,16 @@ dirlookup(struct inode *dp, char *name, uint *poff)
 {
   uint off, inum;
   struct dirent de;
-
+  // int i = 0;
   if(dp->type != T_DIR)
     panic("dirlookup not DIR");
 
   for(off = 0; off < dp->size; off += sizeof(de)){
     if(dp->file_type->iops->readi(dp, (char*)&de, off, sizeof(de)) != sizeof(de))
       panic("dirlookup read");
-    if(de.inum == 0)
+    if(de.inum == 0){
       continue;
+    }
     if(dp->file_type->iops->namecmp(name, de.name) == 0){
       // entry matches path element
       if(poff)
@@ -690,11 +708,11 @@ static struct inode*
 namex(char *path, int nameiparent, char *name)
 {
   struct inode *ip, *next;
-
   if(*path == '/')
     ip = iget(ROOTDEV, ROOTINO);
-  else
+  else{
     ip = idup(myproc()->cwd);
+  }
 
   while((path = skipelem(path, name)) != 0){
     ip->file_type->iops->ilock(ip);

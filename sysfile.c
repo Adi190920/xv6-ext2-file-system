@@ -243,7 +243,7 @@ create(char *path, short type, short major, short minor)
 {
   struct inode *ip, *dp;
   char name[DIRSIZ];
-
+  
   if((dp = nameiparent(path, name)) == 0)
     return 0;
   dp->file_type->iops->ilock(dp);
@@ -294,7 +294,6 @@ sys_open(void)
     return -1;
 
   begin_op();
-
   if(omode & O_CREATE){
     ip = create(path, T_FILE, 0, 0);
     if(ip == 0){
@@ -354,7 +353,6 @@ sys_mknod(void)
   struct inode *ip;
   char *path;
   int major, minor;
-
   begin_op();
   if((argstr(0, &path)) < 0 ||
      argint(1, &major) < 0 ||

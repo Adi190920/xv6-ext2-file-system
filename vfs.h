@@ -3,7 +3,10 @@ struct filesystem_type {
   char * name;
   struct inode_operations * iops;
 };
-
+struct addrs{
+  uint busy;
+  uint addrs[NDIRECT + 1];
+};
 
 struct inode_operations {
   struct inode * (* dirlookup )( struct inode * dp , char * name , uint * off );

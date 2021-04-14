@@ -22,8 +22,8 @@ struct inode {
   short minor;
   short nlink;
   uint size;
-  uint addrs[NDIRECT+1];
-
+  // uint addrs[NDIRECT+1];
+  void *addrs;
   struct filesystem_type *file_type; 
 };
 

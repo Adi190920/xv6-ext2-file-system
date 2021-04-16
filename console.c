@@ -9,6 +9,7 @@
 #include "spinlock.h"
 #include "sleeplock.h"
 #include "fs.h"
+#include "ext2.h"
 #include "file.h"
 #include "memlayout.h"
 #include "mmu.h"

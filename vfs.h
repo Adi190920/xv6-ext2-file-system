@@ -7,7 +7,10 @@ struct addrs{
   uint busy;
   uint addrs[NDIRECT + 1];
 };
-
+struct ext2_addrs{
+  uint busy;
+  uint addrs[EXT2_N_BLOCKS];
+};
 struct inode_operations {
   struct inode * (* dirlookup )( struct inode * dp , char * name , uint * off );
   void (* iupdate )( struct inode * ip );

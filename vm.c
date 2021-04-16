@@ -7,6 +7,7 @@
 #include "proc.h"
 #include "elf.h"
 #include "fs.h"
+#include "ext2.h"
 #include "spinlock.h"
 #include "sleeplock.h"
 #include "file.h"

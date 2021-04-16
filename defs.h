@@ -188,3 +188,12 @@ void            clearpteu(pde_t *pgdir, char *uva);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
+
+//ext2fs.c
+// void            readsb(int dev, struct superblock *sb);
+struct inode*   ext2_ialloc(uint, short);
+void            ext2_ilock(struct inode*);
+void            ext2_iunlock(struct inode*);
+void            ext2_iunlockput(struct inode*);
+void            ext2_iupdate(struct inode*);
+void		        ext2_iinit(int dev);

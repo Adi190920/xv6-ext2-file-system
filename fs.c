@@ -18,17 +18,17 @@
 #include "spinlock.h"
 #include "sleeplock.h"
 #include "fs.h"
+#include "ext2.h"
 #include "vfs.h"
 #include "buf.h"
 #include "file.h"
-
-#include "ext2.h"
+#include "icache.h"
 
 static uint   balloc( uint dev );
 static void   bfree( int dev , uint b );
 static uint   bmap( struct inode * ip , uint bn );
 static void   itrunc(struct inode*);
-// uint ext2_addrs[NINODE][EXT2_N_BLOCKS];
+
 
 struct inode_operations inbuiltfs_iops =  {
   .dirlookup  =   &dirlookup,
@@ -59,7 +59,10 @@ struct filesystem_type inbuiltfs = {
   .name = "inbuiltfs",
   .iops = &inbuiltfs_iops,
 };
+extern struct filesystem_type ext2fs;
+extern struct inode_operations ext2_iops;
 struct addrs addrs[NINODE];
+extern struct ext2_addrs ext2_addrs[NINODE];
 #define min(a, b) ((a) < (b) ? (a) : (b))
 static void itrunc(struct inode*);
 // there should be one superblock per disk device, but we run with
@@ -76,15 +79,15 @@ readsb(int dev, struct superblock *sb)
   memmove(sb, bp->data, sizeof(*sb));
   brelse(bp);
 }
-void
-ext2_readsb(int dev, struct ext2_superblock *sb)
-{
-  struct buf *bp;
+// void
+// ext2_readsb(int dev, struct ext2_superblock *sb)
+// {
+//   struct buf *bp;
 
-  bp = bread(dev, 0);
-  memmove(sb, bp->data + 1024, sizeof(*sb));
-  brelse(bp);
-}
+//   bp = bread(dev, 0);
+//   memmove(sb, bp->data + 1024, sizeof(*sb));
+//   brelse(bp);
+// }
 // Zero a block.
 static void
 bzero(int dev, int bno)
@@ -210,11 +213,8 @@ bfree(int dev, uint b)
 // dev, and inum.  One must hold ip->lock in order to
 // read or write that inode's ip->valid, ip->size, ip->type, &c.
 
-struct {
-  struct spinlock lock;
-  struct inode inode[NINODE];
-} icache;
 
+struct icache icache;
 void
 iinit(int dev)
 {
@@ -224,9 +224,6 @@ iinit(int dev)
   for(i = 0; i < NINODE; i++) {
     initsleeplock(&icache.inode[i].lock, "inode");
   }
-  // for(i = 0; i < NINODE; i++){
-  //   addrs[i].busy = 0;
-  // }
   readsb(dev, &sb);
   cprintf("sb: size %d nblocks %d ninodes %d nlog %d logstart %d\
  inodestart %d bmap start %d\n", sb.size, sb.nblocks,
@@ -234,15 +231,15 @@ iinit(int dev)
           sb.bmapstart);
 }
 
-struct ext2_superblock exs;
+// struct ext2_superblock exs;
 
-void ext2_iinit(int dev){
-	ext2_readsb(dev, &exs);
-  	cprintf("ext2_sb: magic %x icount = %d bcount = %d\n log block size  %d inodes per group  %d first inode %d \
-		inode size %d\n", exs.s_magic, exs.s_inodes_count, exs.s_blocks_count, \
-		exs.s_log_block_size, exs.s_inodes_per_group, exs.s_first_ino, exs.s_inode_size);
+// void ext2_iinit(int dev){
+// 	ext2_readsb(dev, &exs);
+//   	cprintf("ext2_sb: magic %x icount = %d bcount = %d\n log block size  %d inodes per group  %d first inode %d 
+// 		inode size %d\n", exs.s_magic, exs.s_inodes_count, exs.s_blocks_count, 
+// 		exs.s_log_block_size, exs.s_inodes_per_group, exs.s_first_ino, exs.s_inode_size);
 
-}
+// }
 
 static struct inode* iget(uint dev, uint inum);
 
@@ -302,7 +299,7 @@ static struct inode*
 iget(uint dev, uint inum)
 {
   struct inode *ip, *empty;
-  int i = 0;
+  int i, j;
   acquire(&icache.lock);
 
   // Is the inode already cached?
@@ -321,6 +318,10 @@ iget(uint dev, uint inum)
     if(addrs[i].busy == 0)
       break;
   }
+  for(j = 0; j < NINODE; j++){
+    if(ext2_addrs[j].busy == 0)
+      break;
+  }
   // Recycle an inode cache entry.
   if(empty == 0)
     panic("iget: no inodes");
@@ -330,9 +331,16 @@ iget(uint dev, uint inum)
   ip->inum = inum;
   ip->ref = 1;
   ip->valid = 0; 
-  ip->file_type = &inbuiltfs;
-  ip->addrs = (void *)&addrs[i];
-  addrs[i].busy = 1;
+  if(dev == ROOTDEV){
+    ip->file_type = &inbuiltfs;
+    ip->addrs = (void *)&addrs[i];
+    addrs[i].busy = 1;
+  }
+  else{
+    ip->file_type = &ext2fs;
+    ip->addrs = (void *)&ext2_addrs[j];
+    ext2_addrs[j].busy = 1;
+  }
   release(&icache.lock);
   return ip;
 }

@@ -23,7 +23,6 @@
 #include "buf.h"
 #include "file.h"
 #include "icache.h"
-
 static uint   balloc( uint dev );
 static void   bfree( int dev , uint b );
 static uint   bmap( struct inode * ip , uint bn );
@@ -34,9 +33,6 @@ struct inode_operations inbuiltfs_iops =  {
   .dirlookup  =   &dirlookup,
   .iupdate    =   &iupdate,
   .iput       =   &iput,
-  .itrunc     =   &itrunc,
-  // .cleanup    =   &cleanup,
-  .bmap       =   &bmap,
   .ilock      =   &ilock,
   .iunlock    =   &iunlock,
   .iunlockput =   &iunlockput,
@@ -44,14 +40,9 @@ struct inode_operations inbuiltfs_iops =  {
   .readi      =   &readi,
   .writei     =   &writei,
   .dirlink    =   &dirlink,
-  // .unlink     =   &unlink,
-  // .isdirempty =   &isdirempty,
-  // .iinit      =   &iinit,
-  // .getroot    =   &getroot,
-  // .readsb     =   &readsb,   
+  .unlink     =   &fs_unlink,
+  .isdirempty =   &isdirempty,  
   .ialloc     =   &ialloc,
-  .balloc     =   &balloc,
-  .bfree      =   &bfree,
   .namecmp    =   &namecmp
 };
 
@@ -63,8 +54,8 @@ extern struct filesystem_type ext2fs;
 extern struct inode_operations ext2_iops;
 struct addrs addrs[NINODE];
 extern struct ext2_addrs ext2_addrs[NINODE];
+
 #define min(a, b) ((a) < (b) ? (a) : (b))
-static void itrunc(struct inode*);
 // there should be one superblock per disk device, but we run with
 // only one device
 struct superblock sb; 
@@ -79,24 +70,19 @@ readsb(int dev, struct superblock *sb)
   memmove(sb, bp->data, sizeof(*sb));
   brelse(bp);
 }
-// void
-// ext2_readsb(int dev, struct ext2_superblock *sb)
-// {
-//   struct buf *bp;
 
-//   bp = bread(dev, 0);
-//   memmove(sb, bp->data + 1024, sizeof(*sb));
-//   brelse(bp);
-// }
 // Zero a block.
-static void
+void
 bzero(int dev, int bno)
 {
   struct buf *bp;
 
   bp = bread(dev, bno);
   memset(bp->data, 0, BSIZE);
-  log_write(bp);
+  if(dev == ROOTDEV)
+    log_write(bp);
+  else  
+    bwrite(bp);
   brelse(bp);
 }
 
@@ -231,16 +217,6 @@ iinit(int dev)
           sb.bmapstart);
 }
 
-// struct ext2_superblock exs;
-
-// void ext2_iinit(int dev){
-// 	ext2_readsb(dev, &exs);
-//   	cprintf("ext2_sb: magic %x icount = %d bcount = %d\n log block size  %d inodes per group  %d first inode %d 
-// 		inode size %d\n", exs.s_magic, exs.s_inodes_count, exs.s_blocks_count, 
-// 		exs.s_log_block_size, exs.s_inodes_per_group, exs.s_first_ino, exs.s_inode_size);
-
-// }
-
 static struct inode* iget(uint dev, uint inum);
 
 //PAGEBREAK!
@@ -307,7 +283,6 @@ iget(uint dev, uint inum)
   for(ip = &icache.inode[0]; ip < &icache.inode[NINODE]; ip++){
     if(ip->ref > 0 && ip->dev == dev && ip->inum == inum){
       ip->ref++;
-      // ip->file_type = &inbuiltfs;
       release(&icache.lock);
       return ip;
     }
@@ -416,12 +391,11 @@ iput(struct inode *ip)
     release(&icache.lock);
     if(r == 1){
       // inode has no links and no other references: truncate and free.
-      ip->file_type->iops->itrunc(ip);
+      itrunc(ip);
       ip->type = 0;
       ip->file_type->iops->iupdate(ip);
       ip->valid = 0;
       ip->file_type = 0;
-      // ad->busy = 0;
       ip->addrs = 0;
     }
   }
@@ -465,7 +439,7 @@ bmap(struct inode *ip, uint bn)
   ad = (struct addrs *)ip->addrs;
   if(bn < NDIRECT){
     if((addr = ad->addrs[bn]) == 0)
-      ad->addrs[bn] = addr = ip->file_type->iops->balloc(ip->dev);
+      ad->addrs[bn] = addr = balloc(ip->dev);
     return addr;
   }
   bn -= NDIRECT;
@@ -473,11 +447,11 @@ bmap(struct inode *ip, uint bn)
   if(bn < NINDIRECT){
     // Load indirect block, allocating if necessary.
     if((addr = ad->addrs[NDIRECT]) == 0)
-      ad->addrs[NDIRECT] = addr = ip->file_type->iops->balloc(ip->dev);
+      ad->addrs[NDIRECT] = addr = balloc(ip->dev);
     bp = bread(ip->dev, addr);
     a = (uint*)bp->data;
     if((addr = a[bn]) == 0){
-      a[bn] = addr = ip->file_type->iops->balloc(ip->dev);
+      a[bn] = addr = balloc(ip->dev);
       log_write(bp);
     }
     brelse(bp);
@@ -503,7 +477,7 @@ itrunc(struct inode *ip)
   ad = (struct addrs *)ip->addrs;
   for(i = 0; i < NDIRECT; i++){
     if(ad->addrs[i]){
-      ip->file_type->iops->bfree(ip->dev, ad->addrs[i]);
+      bfree(ip->dev, ad->addrs[i]);
       ad->addrs[i] = 0;
     }
   }
@@ -513,10 +487,10 @@ itrunc(struct inode *ip)
     a = (uint*)bp->data;
     for(j = 0; j < NINDIRECT; j++){
       if(a[j])
-        ip->file_type->iops->bfree(ip->dev, a[j]);
+        bfree(ip->dev, a[j]);
     }
     brelse(bp);
-    ip->file_type->iops->bfree(ip->dev, ad->addrs[NDIRECT]);
+    bfree(ip->dev, ad->addrs[NDIRECT]);
     ad->addrs[NDIRECT] = 0;
   }
 
@@ -557,7 +531,7 @@ readi(struct inode *ip, char *dst, uint off, uint n)
     n = ip->size - off;
 
   for(tot=0; tot<n; tot+=m, off+=m, dst+=m){
-    bp = bread(ip->dev, ip->file_type->iops->bmap(ip, off/BSIZE));
+    bp = bread(ip->dev, bmap(ip, off/BSIZE));
     m = min(n - tot, BSIZE - off%BSIZE);
     memmove(dst, bp->data + off%BSIZE, m);
     brelse(bp);
@@ -586,7 +560,7 @@ writei(struct inode *ip, char *src, uint off, uint n)
     return -1;
 
   for(tot=0; tot<n; tot+=m, off+=m, src+=m){
-    bp = bread(ip->dev, ip->file_type->iops->bmap(ip, off/BSIZE));
+    bp = bread(ip->dev, bmap(ip, off/BSIZE));
     m = min(n - tot, BSIZE - off%BSIZE);
     memmove(bp->data + off%BSIZE, src, m);
     log_write(bp);
@@ -616,7 +590,6 @@ dirlookup(struct inode *dp, char *name, uint *poff)
 {
   uint off, inum;
   struct dirent de;
-  // int i = 0;
   if(dp->type != T_DIR)
     panic("dirlookup not DIR");
 
@@ -676,7 +649,7 @@ dirlink(struct inode *dp, char *name, uint inum)
 // The returned path has no leading slashes,
 // so the caller can check *path=='\0' to see if the name is the last one.
 // If no name to remove, return 0.
-//
+//#
 // Examples:
 //   skipelem("a/bb/c", name) = "bb/c", setting name = "a"
 //   skipelem("///a//bb", name) = "bb", setting name = "a"
@@ -718,10 +691,12 @@ namex(char *path, int nameiparent, char *name)
   struct inode *ip, *next;
   if(*path == '/')
     ip = iget(ROOTDEV, ROOTINO);
+  else if( namecmp(path, "mnt") == 0 ){
+    ip = iget(EXT2DEV, EXT2_ROOT_INO);
+  }
   else{
     ip = idup(myproc()->cwd);
   }
-
   while((path = skipelem(path, name)) != 0){
     ip->file_type->iops->ilock(ip);
     if(ip->type != T_DIR){

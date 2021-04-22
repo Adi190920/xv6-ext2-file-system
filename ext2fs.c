@@ -12,39 +12,31 @@
 #include "buf.h"
 #include "file.h"
 #include "icache.h"
-// static uint   ext2_balloc( uint dev );
-// static void   bfree( int dev , uint b );
-// static uint   bmap( struct inode * ip , uint bn );
-static void   ext2_itrunc(struct inode*);
+static uint ext2_balloc(uint , uint );
+static void ext2_bfree(int , uint );
+static uint ext2_bmap(struct inode *, uint );
+static void ext2_itrunc(struct inode *);
 
 struct inode_operations ext2fs_iops = {
-    // .dirlookup  =   &dirlookup,
-    .iupdate    =   &ext2_iupdate,
-    // .iput       =   &iput,
-    .itrunc     =   &ext2_itrunc,
-    // // .cleanup    =   &cleanup,
-    // .bmap       =   &bmap,
+    .dirlookup = &ext2_dirlookup,
+    .iupdate = &ext2_iupdate,
+    .iput = &ext2_iput,
     .ilock = &ext2_ilock,
-    .iunlock    =   &ext2_iunlock,
-    // .iunlockput =   &iunlockput,
-    // .stati      =   &ext2_stati,
-    // .readi      =   &ext2_readi,
-    // .writei     =   &writei,
-    // .dirlink    =   &dirlink,
-    // // .unlink     =   &unlink,
-    // // .isdirempty =   &isdirempty,
-    // // .iinit      =   &iinit,
-    // // .getroot    =   &getroot,
-    // // .readsb     =   &readsb,
+    .iunlock = &iunlock,
+    .iunlockput = &iunlockput,
+    .stati = &stati,
+    .readi = &ext2_readi,
+    .writei = &ext2_writei,
+    .dirlink = &ext2_dirlink,
+    .unlink     =   &ext2_unlink,
+    .isdirempty =   &ext2_isdirempty,
     .ialloc = &ext2_ialloc,
-    // .balloc     =   &ext2_balloc,
-    // .bfree      =   &bfree,
-    // .namecmp    =   &namecmp
+    .namecmp = &ext2_namecmp
 };
 
 struct filesystem_type ext2fs = {
-  .name = "ext2fs",
-  .iops = &ext2fs_iops,
+    .name = "ext2fs",
+    .iops = &ext2fs_iops,
 };
 struct ext2_addrs ext2_addrs[NINODE];
 struct ext2_superblock exs;
@@ -52,14 +44,69 @@ extern struct icache icache;
 extern struct filesystem_type inbuiltfs;
 extern struct inode_operations inbuiltfs_iops;
 extern struct addrs addrs[NINODE];
-static struct inode* iget(uint dev, uint inum);
+static struct inode *iget(uint dev, uint inum);
+#define min(a, b) ((a) < (b) ? (a) : (b))
 
 void ext2_readsb(int dev, struct ext2_superblock *sb)
 {
   struct buf *bp;
-
   bp = bread(dev, 0);
   memmove(sb, bp->data + 1024, sizeof(*sb));
+  brelse(bp);
+}
+
+static uint
+zeroth_bit(char *bmap)
+{
+  int b, m;
+  for (b = 0; b < exs.s_blocks_per_group * 8; b++)
+  {
+    m = 1 << (b % 8);
+    if ((bmap[b / 8] & m) == 0)
+    {
+      bmap[b / 8] = bmap[b / 8] | m;
+      return b;
+    }
+  }
+  return -1;
+}
+// Allocate a zeroed disk block.
+static uint
+ext2_balloc(uint dev, uint inum)
+{
+  uint bblock;
+  struct buf *bp, *gdbp;
+  struct ext2_group_desc gd;
+  int zbit, group_no = GN(inum, exs);
+  gdbp = bread(dev, 1);
+  memmove(&gd, gdbp->data + group_no * sizeof(gd), sizeof(gd));
+  bp = bread(dev, gd.bg_block_bitmap);
+  if((zbit = zeroth_bit((char *)bp->data)) > -1){
+    bblock = gd.bg_block_bitmap + zbit;
+    bwrite(bp);
+    bzero(dev, bblock);
+    return bblock;
+  }
+  panic("balloc: out of blocks");
+}
+// Free a disk block.
+static void
+ext2_bfree(int dev, uint b)
+{
+  struct buf *bp;
+  int m;
+  struct ext2_group_desc gd;
+  uint bg = b / exs.s_blocks_per_group;
+  uint index = b % exs.s_blocks_per_group;
+  bp = bread(dev, 1);
+  memmove(&gd, bp->data + bg * sizeof(gd), sizeof(gd));
+  brelse(bp);
+  bp = bread(dev, gd.bg_block_bitmap);
+  m = 1 << (index % 8);
+  if ((bp->data[index / 8] & m) == 0)
+    panic("freeing free block");
+  bp->data[index / 8] &= ~m;
+  bwrite(bp);
   brelse(bp);
 }
 
@@ -79,31 +126,37 @@ void ext2_iinit(int dev)
 struct inode *
 ext2_ialloc(uint dev, short type)
 {
-  int inum;
-  struct buf *bp;
+  int i, index, inode_index, inum;
+  uint blocknum, b_grp_count = exs.s_blocks_count / exs.s_blocks_per_group;
+  struct buf *bp, *ibp, *gd_bp;
   struct ext2_group_desc gd;
   struct ext2_inode_large in;
-  int group_no, inode_off;
-  for (inum = 2; inum < exs.s_inodes_count; inum++)
-  {
-    group_no = GN(inum, exs);
-    inode_off = IO(inum, exs);
-    bp = bread(dev, BSIZE + sizeof(struct ext2_group_desc) * (group_no));
-    memmove(&gd, bp->data, sizeof(struct ext2_group_desc));
-    brelse(bp);
-    bp = bread(dev, gd.bg_inode_table * BSIZE + inode_off * exs.s_inode_size);
-    memmove(&in, bp->data, exs.s_inode_size);
-    // bp = bread(dev, IBLOCK(inum, sb));
-    // dip = (struct dinode*)bp->data + inum%IPB;
-    if (in.i_mode == 0)
-    { // a free inode
-      memset(&in, 0, sizeof(in));
-      in.i_mode = type;
-      // log_write(bp);   // mark it allocated on the disk
-      brelse(bp);
-      return iget(dev, inum);
+  for (i = 0; i <= b_grp_count; i++){
+    gd_bp = bread(dev, 1);
+    memmove(&gd, gd_bp->data + sizeof(gd) * i, sizeof(struct ext2_group_desc));
+    bp = bread(dev, gd.bg_inode_bitmap);
+    index = zeroth_bit((char *)bp->data);
+    if(index == -1){
+      continue;
     }
+    blocknum = gd.bg_inode_table + BSIZE / sizeof(in);
+    ibp = bread(dev, blocknum);
+    inode_index = index % BSIZE / sizeof(in);
+    memmove(&in, bp->data + inode_index * sizeof(in), sizeof(in));
+    if(in.i_mode == 0){
+      memset(&in, 0, sizeof(in));
+      if(type == T_DIR)
+        in.i_mode = S_IFDIR;
+      if(type == T_FILE)
+        in.i_mode = S_IFREG;
+    }
+    bwrite(ibp);
+    brelse(ibp);
+    bwrite(bp);
     brelse(bp);
+    brelse(gd_bp);
+    inum = i * EXT2_INODES_PER_BLOCK(exs) + inode_index;
+    return iget(dev, inum);
   }
   panic("ialloc: no inodes");
 }
@@ -114,69 +167,70 @@ ext2_ialloc(uint dev, short type)
 // Caller must hold ip->lock.
 void ext2_iupdate(struct inode *ip)
 {
-  struct buf *bp;
+  struct buf *bp, *gdbp;
   struct ext2_group_desc gd;
   struct ext2_inode_large in;
   struct ext2_addrs *addrs;
   int group_no, inode_off;
   group_no = GN(ip->inum, exs);
   inode_off = IO(ip->inum, exs);
-  bp = bread(ip->dev, BSIZE + sizeof(struct ext2_group_desc) * (group_no));
-  memmove(&gd, bp->data, sizeof(struct ext2_group_desc));
-  brelse(bp);
-  bp = bread(ip->dev, gd.bg_inode_table * BSIZE + inode_off * exs.s_inode_size);
-  memmove(&in, bp->data, exs.s_inode_size);
-  in.i_mode = ip->type;
-  // dip->major = ip->major;
-  // dip->minor = ip->minor;
+  gdbp = bread(ip->dev, 1);
+  memmove(&gd, gdbp->data + group_no * sizeof(gd), sizeof(gd));
+
+  bp = bread(ip->dev, gd.bg_inode_table);
+  memmove(&in, bp->data + (inode_off * exs.s_inode_size), exs.s_inode_size);
+  if(ip->type == T_DIR)
+    in.i_mode = S_IFDIR;
+  if(ip->type == T_FILE)
+    in.i_mode = S_IFREG;
   in.i_links_count = ip->nlink;
   in.i_size = ip->size;
   addrs = (struct ext2_addrs *)ip->addrs;
   memmove(in.i_block, addrs->addrs, sizeof(addrs->addrs));
-  // log_write(bp);
+  memmove(bp->data + (inode_off * exs.s_inode_size), &in, exs.s_inode_size);
+  bwrite(bp);
+  brelse(gdbp);
   brelse(bp);
 }
 
 // Find the inode with number inum on device dev
 // and return the in-memory copy. Does not lock
 // the inode and does not read it from disk.
-static struct inode*
+static struct inode *
 iget(uint dev, uint inum)
 {
   struct inode *ip, *empty;
   int i, j;
   acquire(&icache.lock);
-
   // Is the inode already cached?
   empty = 0;
-  for(ip = &icache.inode[0]; ip < &icache.inode[NINODE]; ip++){
-    if(ip->ref > 0 && ip->dev == dev && ip->inum == inum){
+  for (ip = &icache.inode[0]; ip < &icache.inode[NINODE]; ip++){
+    if (ip->ref > 0 && ip->dev == dev && ip->inum == inum){
       ip->ref++;
-      // ip->file_type = &inbuiltfs;
       release(&icache.lock);
       return ip;
     }
-    if(empty == 0 && ip->ref == 0)    // Remember empty slot.
+    if (empty == 0 && ip->ref == 0) // Remember empty slot.
       empty = ip;
   }
-  for(i = 0; i < NINODE; i++){
-    if(addrs[i].busy == 0)
+  for (i = 0; i < NINODE; i++){
+    if (addrs[i].busy == 0)
       break;
   }
-  for(j = 0; j < NINODE; j++){
-    if(ext2_addrs[j].busy == 0)
+  for (j = 0; j < NINODE; j++){
+    if (ext2_addrs[j].busy == 0)
       break;
   }
   // Recycle an inode cache entry.
-  if(empty == 0)
+  if (empty == 0)
     panic("iget: no inodes");
 
   ip = empty;
   ip->dev = dev;
   ip->inum = inum;
   ip->ref = 1;
-  ip->valid = 0; 
-  if(dev == ROOTDEV){
+  ip->valid = 0;
+  if (dev == ROOTDEV){
     ip->file_type = &inbuiltfs;
     ip->addrs = (void *)&addrs[i];
     addrs[i].busy = 1;
@@ -192,7 +246,7 @@ iget(uint dev, uint inum)
 
 void ext2_ilock(struct inode *ip)
 {
-  struct buf *bp;
+  struct buf *bp, *bp1;
   struct ext2_group_desc gd;
   struct ext2_inode_large in;
   int group_no, inode_off;
@@ -202,19 +256,20 @@ void ext2_ilock(struct inode *ip)
 
   acquiresleep(&ip->lock);
 
-  if (ip->valid == 0)
-  {
+  if (ip->valid == 0){
     group_no = GN(ip->inum, exs);
     inode_off = IO(ip->inum, exs);
-    bp = bread(ip->dev, BSIZE + sizeof(struct ext2_group_desc) * (group_no));
-    memmove(&gd, bp->data, sizeof(struct ext2_group_desc));
-    bp = bread(ip->dev, gd.bg_inode_table * BSIZE + inode_off * exs.s_inode_size);
-    memmove(&in, bp->data, exs.s_inode_size);
-    // bp = bread(ip->dev, IBLOCK(ip->inum, exs));
-    // dip = (struct dinode*)bp->data + ip->inum%IPB;
-    ip->type = in.i_mode;
-    // ip->major = in->major;
-    // ip->minor = in->minor;
+    bp1 = bread(ip->dev, 1 + sizeof(struct ext2_group_desc) * (group_no));
+    memmove(&gd, bp1->data, sizeof(struct ext2_group_desc));
+    brelse(bp1);
+    bp = bread(ip->dev, gd.bg_inode_table);
+    memmove(&in, bp->data + inode_off * exs.s_inode_size, exs.s_inode_size);
+    if (S_ISDIR(in.i_mode))
+      ip->type = T_DIR;
+    else if (S_ISREG(in.i_mode))
+      ip->type = T_FILE;
+    ip->major = 0;
+    ip->minor = 0;
     ip->nlink = in.i_links_count;
     ip->size = in.i_size;
     addrs = (struct ext2_addrs *)ip->addrs;
@@ -226,15 +281,6 @@ void ext2_ilock(struct inode *ip)
   }
 }
 
-// Unlock the given inode.
-void
-ext2_iunlock(struct inode *ip)
-{
-  if(ip == 0 || !holdingsleep(&ip->lock) || ip->ref < 1)
-    panic("iunlock");
-
-  releasesleep(&ip->lock);
-}
 
 // Drop a reference to an in-memory inode.
 // If that was the last reference, the inode cache entry can
@@ -243,23 +289,22 @@ ext2_iunlock(struct inode *ip)
 // to it, free the inode (and its content) on disk.
 // All calls to iput() must be inside a transaction in
 // case it has to free the inode.
-void
+void 
 ext2_iput(struct inode *ip)
 {
   struct ext2_addrs *addrs;
   addrs = (struct ext2_addrs *)ip->addrs;
   acquiresleep(&ip->lock);
-  if(ip->valid && ip->nlink == 0){
+  if (ip->valid && ip->nlink == 0){
     acquire(&icache.lock);
     int r = ip->ref;
     release(&icache.lock);
-    if(r == 1){
+    if (r == 1){
       // inode has no links and no other references: truncate and free.
-      ip->file_type->iops->itrunc(ip);
+      ext2_itrunc(ip);
       ip->type = 0;
       ip->file_type->iops->iupdate(ip);
       ip->valid = 0;
-      // fs->busy = 0;
       ip->file_type = 0;
     }
   }
@@ -267,22 +312,76 @@ ext2_iput(struct inode *ip)
 
   acquire(&icache.lock);
   ip->ref--;
-  if(ip->ref == 0){
+  if (ip->ref == 0){
     addrs->busy = 0;
     ip->file_type = 0;
   }
   release(&icache.lock);
 }
 
-// Common idiom: unlock, then put.
-void
-ext2_iunlockput(struct inode *ip)
+static uint
+ext2_bmap(struct inode *ip, uint bn)
 {
-  ip->file_type->iops->iunlock(ip);
-  ip->file_type->iops->iput(ip);
+  uint addr, *a, *b, *c;
+  struct buf *bp, *bp1, *bp2;
+  struct ext2_addrs *ad;
+  ad = (struct ext2_addrs *)ip->addrs;
+  if (bn < EXT2_NDIR_BLOCKS){
+    if ((addr = ad->addrs[bn]) == 0){
+      ad->addrs[bn] = addr = ext2_balloc(ip->dev, ip->inum);
+    }
+    return addr;
+  }
+  bn -= EXT2_NDIR_BLOCKS;
+  if (bn < NINDIRECT1){
+    if ((addr = ad->addrs[EXT2_IND_BLOCK]) == 0)
+      ad->addrs[EXT2_IND_BLOCK] = addr = ext2_balloc(ip->dev, ip->inum);
+    bp = bread(ip->dev, addr);
+    a = (uint *)bp->data;
+    if ((addr = a[bn]) == 0)
+      a[bn] = addr = ext2_balloc(ip->dev, ip->inum);
+    brelse(bp);
+    return addr;
+  }
+  bn -= NINDIRECT1;
+  if (bn < NDINDIRECT){
+    if ((addr = ad->addrs[EXT2_DIND_BLOCK]) == 0)
+      ad->addrs[EXT2_DIND_BLOCK] = addr = ext2_balloc(ip->dev, ip->inum);
+    bp = bread(ip->dev, addr);
+    a = (uint *)bp->data;
+    if ((addr = a[bn / NINDIRECT1]) == 0)
+      a[bn / NINDIRECT1] = addr = ext2_balloc(ip->dev, ip->inum);
+    bp1 = bread(ip->dev, addr);
+    b = (uint *)bp->data;
+    if ((addr = b[bn / NINDIRECT1]) == 0)
+      b[bn / NINDIRECT1] = addr = ext2_balloc(ip->dev, ip->inum);
+    brelse(bp1);
+    brelse(bp);
+    return addr;
+  }
+  bn -= NDINDIRECT;
+  if (bn < NTINDIRECT){
+    if ((addr = ad->addrs[EXT2_TIND_BLOCK]) == 0)
+      ad->addrs[EXT2_TIND_BLOCK] = addr = ext2_balloc(ip->dev, ip->inum);
+    bp = bread(ip->dev, addr);
+    a = (uint *)bp->data;
+    if ((addr = a[bn / NINDIRECT1]) == 0)
+      a[bn / NINDIRECT1] = addr = ext2_balloc(ip->dev, ip->inum);
+    bp1 = bread(ip->dev, addr);
+    b = (uint *)bp->data;
+    if ((addr = b[bn / NINDIRECT1]) == 0)
+      b[bn / NINDIRECT1] = addr = ext2_balloc(ip->dev, ip->inum);
+    bp2 = bread(ip->dev, addr);
+    c = (uint *)bp->data;
+    if ((addr = c[bn / NINDIRECT1]) == 0)
+      b[bn / NINDIRECT1] = addr = ext2_balloc(ip->dev, ip->inum);
+    brelse(bp2);
+    brelse(bp1);
+    brelse(bp);
+    return addr;
+  }
+  panic("bmap: out of range");
 }
-
-
 // Truncate inode (discard contents).
 // Only called when the inode has no links
 // to it (no directory entries referring to it)
@@ -296,82 +395,193 @@ ext2_itrunc(struct inode *ip)
   uint *a, *b, *c;
   struct ext2_addrs *addrs;
   addrs = (struct ext2_addrs *)ip->addrs;
-  for(i = 0; i < EXT2_NDIR_BLOCKS; i++){
-    if(addrs->addrs[i]){
-      ip->file_type->iops->bfree(ip->dev, addrs->addrs[i]);
+  for (i = 0; i < EXT2_NDIR_BLOCKS; i++){
+    if (addrs->addrs[i]){
+      ext2_bfree(ip->dev, addrs->addrs[i]);
       addrs->addrs[i] = 0;
     }
   }
 
-  if(addrs->addrs[EXT2_IND_BLOCK]){
+  if (addrs->addrs[EXT2_IND_BLOCK]){
     bp = bread(ip->dev, addrs->addrs[EXT2_IND_BLOCK]);
-    a = (uint32*)bp->data;
-    for(j = 0; j < (BSIZE / sizeof(uint32)); j++){
-      if(a[j])
-        ip->file_type->iops->bfree(ip->dev, a[j]);
+    a = (uint *)bp->data;
+    for (j = 0; j < (BSIZE / sizeof(uint)); j++){
+      if (a[j])
+        ext2_bfree(ip->dev, a[j]);
     }
     brelse(bp);
-    ip->file_type->iops->bfree(ip->dev, addrs->addrs[EXT2_IND_BLOCK]);
+    ext2_bfree(ip->dev, addrs->addrs[EXT2_IND_BLOCK]);
     addrs->addrs[EXT2_IND_BLOCK] = 0;
   }
-  if(addrs->addrs[EXT2_DIND_BLOCK]){
+  if (addrs->addrs[EXT2_DIND_BLOCK]){
     bp = bread(ip->dev, addrs->addrs[EXT2_DIND_BLOCK]);
-    a = (uint32*)bp->data;
-    for(j = 0; j < (BSIZE / sizeof(uint32)); j++){
-      if(a[j]){
+    a = (uint *)bp->data;
+    for (j = 0; j < (BSIZE / sizeof(uint)); j++){
+      if (a[j]){
         bp1 = bread(ip->dev, a[j]);
-        b = (uint32*)bp->data;
-        for(i = 0; i < (BSIZE / sizeof(uint32)); i++){
-          if(b[i])
-            ip->file_type->iops->bfree(ip->dev, b[i]);
+        b = (uint *)bp->data;
+        for (i = 0; i < (BSIZE / sizeof(uint)); i++){
+          if (b[i])
+            ext2_bfree(ip->dev, b[i]);
         }
         brelse(bp1);
-        ip->file_type->iops->bfree(ip->dev, a[j]); 
+        ext2_bfree(ip->dev, a[j]);
       }
     }
     brelse(bp);
-    ip->file_type->iops->bfree(ip->dev, addrs->addrs[EXT2_DIND_BLOCK]);
+    ext2_bfree(ip->dev, addrs->addrs[EXT2_DIND_BLOCK]);
     addrs->addrs[EXT2_DIND_BLOCK] = 0;
   }
-  if(addrs->addrs[EXT2_TIND_BLOCK]){
+  if (addrs->addrs[EXT2_TIND_BLOCK]){
     bp = bread(ip->dev, addrs->addrs[EXT2_DIND_BLOCK]);
-    a = (uint32*)bp->data;
-    for(j = 0; j < (BSIZE / sizeof(uint32)); j++){
-      if(a[j]){
+    a = (uint *)bp->data;
+    for (j = 0; j < (BSIZE / sizeof(uint)); j++){
+      if (a[j]){
         bp1 = bread(ip->dev, a[j]);
-        b = (uint32*)bp1->data;
-        for(i = 0; i < (BSIZE / sizeof(uint32)); i++){
-          if(b[i]){
+        b = (uint *)bp1->data;
+        for (i = 0; i < (BSIZE / sizeof(uint)); i++){
+          if (b[i]){
             bp2 = bread(ip->dev, a[j]);
-            c = (uint32*)bp2->data;
-            for(k = 0; k < (BSIZE / sizeof(uint32)); k++){
-              if(c[k])
-                ip->file_type->iops->bfree(ip->dev, c[k]);
-            }  
+            c = (uint *)bp2->data;
+            for (k = 0; k < (BSIZE / sizeof(uint)); k++){
+              if (c[k])
+                ext2_bfree(ip->dev, c[k]);
+            }
             brelse(bp2);
-            ip->file_type->iops->bfree(ip->dev, b[i]);
+            ext2_bfree(ip->dev, b[i]);
           }
         }
         brelse(bp1);
-        ip->file_type->iops->bfree(ip->dev, a[j]); 
+        ext2_bfree(ip->dev, a[j]);
       }
     }
     brelse(bp);
-    ip->file_type->iops->bfree(ip->dev, addrs->addrs[EXT2_DIND_BLOCK]);
+    ext2_bfree(ip->dev, addrs->addrs[EXT2_DIND_BLOCK]);
     addrs->addrs[EXT2_TIND_BLOCK] = 0;
-  ip->size = 0;
-  ip->file_type->iops->iupdate(ip);
+    ip->size = 0;
+    ip->file_type->iops->iupdate(ip);
   }
 }
 
-// Copy stat information from inode.
+//PAGEBREAK!
+// Read data from inode.
 // Caller must hold ip->lock.
-void
-ext2_stati(struct inode *ip, struct stat *st)
+int ext2_readi(struct inode *ip, char *dst, uint off, uint n)
 {
-  st->dev = ip->dev;
-  st->ino = ip->inum;
-  st->type = ip->type;
-  st->nlink = ip->nlink;
-  st->size = ip->size;
+  uint tot, m = 0;
+  struct buf *bp;
+  if (ip->type == T_DEV){
+    if (ip->major < 0 || ip->major >= NDEV || !devsw[ip->major].read)
+      return -1;
+    return devsw[ip->major].read(ip, dst, n);
+  }
+
+  if (off > ip->size || off + n < off)
+    return -1;
+  if (off + n > ip->size)
+    n = ip->size - off;
+  for (tot = 0; tot < n; tot += m, off += m, dst += m){
+    bp = bread(ip->dev, ext2_bmap(ip, (off + m) / BSIZE));
+    m = min(n - tot, BSIZE - off % BSIZE);
+    memmove(dst, bp->data + off % BSIZE, m);
+    brelse(bp);
+  }
+  return n;
+}
+
+// PAGEBREAK!
+// Write data to inode.
+// Caller must hold ip->lock.
+int ext2_writei(struct inode *ip, char *src, uint off, uint n)
+{
+  uint tot, m = 0;
+  struct buf *bp;
+
+  if (ip->type == T_DEV){
+    if (ip->major < 0 || ip->major >= NDEV || !devsw[ip->major].write)
+      return -1;
+    return devsw[ip->major].write(ip, src, n);
+  }
+
+  if (off > ip->size || off + n < off)
+    return -1;
+  if (off + n > EXT2_MAXFILE * BSIZE)
+    return -1;
+  for (tot = 0; tot < n; tot += m, off += m, src += m){
+    bp = bread(ip->dev, ext2_bmap(ip, off / BSIZE));
+    m = min(n - tot, BSIZE - off % BSIZE);
+    memmove(bp->data + off % BSIZE, src, m);
+    
+    bwrite(bp);
+    brelse(bp);
+  }
+  
+  if (n > 0 && off > ip->size){
+    ip->size = off;
+    ip->file_type->iops->iupdate(ip);
+  }
+  return n;
+}
+
+int
+ext2_namecmp(const char *s, const char *t)
+{
+  return strncmp(s, t, EXT2_NAME_LEN);
+}
+// Look for a directory entry in a directory.
+// If found, set *poff to byte offset of entry.
+struct inode *
+ext2_dirlookup(struct inode *dp, char *name, uint *poff)
+{
+  uint off, inum;
+  struct ext2_dir_entry_2 de;
+  
+  for (off = 0; off < dp->size; off += de.rec_len){
+    if (dp->file_type->iops->readi(dp, (char *)&de, off, sizeof(de)) != sizeof(de))
+      panic("dirlookup read");
+    if (de.inode == 0){
+      continue;
+    }
+    de.name[de.name_len] = 0;
+
+    if (dp->file_type->iops->namecmp(name, de.name) == 0){
+      // entry matches path element
+      if (poff)
+        *poff = off;
+      inum = de.inode;
+      return iget(dp->dev, inum);
+    }
+  }
+
+  return 0;
+}
+
+// Write a new directory entry (name, inum) into the directory dp.
+int ext2_dirlink(struct inode *dp, char *name, uint inum)
+{
+  int off;
+  struct ext2_dir_entry_2 de;
+  struct inode *ip;
+
+  // Check that name is not present.
+  if ((ip = dp->file_type->iops->dirlookup(dp, name, 0)) != 0){
+    ip->file_type->iops->iput(ip);
+    return -1;
+  }
+
+  // Look for an empty dirent.
+  for (off = 0; off < dp->size; off += de.rec_len){
+    if (dp->file_type->iops->readi(dp, (char *)&de, off, sizeof(de)) != sizeof(de))
+      panic("dirlink read");
+    if (de.inode == 0)
+      break;
+  }
+  
+  strncpy(de.name, name, EXT2_NAME_LEN);
+  de.inode = inum;
+  de.name_len = strlen(de.name);
+  de.rec_len = sizeof(de.inode) + sizeof(de.file_type) + sizeof(de.name) + sizeof(de.name_len) + sizeof(de.rec_len);
+  if (dp->file_type->iops->writei(dp, (char *)&de, off, sizeof(de)) != sizeof(de))
+    panic("dirlink");
+  return 0;
 }

@@ -166,7 +166,7 @@ bad:
 }
 
 // Is the directory dp empty except for "." and ".." ?
-static int
+int
 isdirempty(struct inode *dp)
 {
   int off;
@@ -180,13 +180,41 @@ isdirempty(struct inode *dp)
   }
   return 1;
 }
+int
+ext2_isdirempty(struct inode *dp)
+{
+  int off;
+  struct ext2_dir_entry_2 de;
 
+  for(off=24; off<dp->size; off+=de.rec_len){
+    if(dp->file_type->iops->readi(dp, (char*)&de, off, sizeof(de)) != sizeof(de))
+      panic("isdirempty: readi");
+    if(de.inode != 0)
+      return 0;
+  }
+  return 1;
+}
+void
+fs_unlink(struct inode *dp, uint off)
+{
+  struct dirent de;
+  memset(&de, 0, sizeof(de));
+  if(dp->file_type->iops->writei(dp, (char*)&de, off, sizeof(de)) != sizeof(de))
+    panic("unlink: writei");
+}
+void
+ext2_unlink(struct inode *dp, uint off)
+{
+  struct ext2_dir_entry_2 de;
+  memset(&de, 0, sizeof(de));
+  if(dp->file_type->iops->writei(dp, (char*)&de, off, sizeof(de)) != sizeof(de))
+    panic("unlink: writei");
+}
 //PAGEBREAK!
 int
 sys_unlink(void)
 {
   struct inode *ip, *dp;
-  struct dirent de;
   char name[DIRSIZ], *path;
   uint off;
 
@@ -211,14 +239,11 @@ sys_unlink(void)
 
   if(ip->nlink < 1)
     panic("unlink: nlink < 1");
-  if(ip->type == T_DIR && !isdirempty(ip)){
+  if(ip->type == T_DIR && !ip->file_type->iops->isdirempty(ip)){
     ip->file_type->iops->iunlockput(ip);
     goto bad;
   }
-
-  memset(&de, 0, sizeof(de));
-  if(dp->file_type->iops->writei(dp, (char*)&de, off, sizeof(de)) != sizeof(de))
-    panic("unlink: writei");
+  dp->file_type->iops->unlink(dp, off);
   if(ip->type == T_DIR){
     dp->nlink--;
     dp->file_type->iops->iupdate(dp);
@@ -251,7 +276,7 @@ create(char *path, short type, short major, short minor)
 
   if((ip = dp->file_type->iops->dirlookup(dp, name, 0)) != 0){
     dp->file_type->iops->iunlockput(dp);
-    dp->file_type->iops->ilock(ip);
+    ip->file_type->iops->ilock(ip);
     if(type == T_FILE && ip->type == T_FILE)
       return ip;
     ip->file_type->iops->iunlockput(ip);
@@ -313,7 +338,6 @@ sys_open(void)
       return -1;
     }
   }
-
   if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
     if(f)
       fileclose(f);
@@ -386,7 +410,7 @@ sys_chdir(void)
     return -1;
   }
   ip->file_type->iops->iunlock(ip);
-  ip->file_type->iops->iput(curproc->cwd);
+  curproc->cwd->file_type->iops->iput(curproc->cwd);
   end_op();
   curproc->cwd = ip;
   return 0;

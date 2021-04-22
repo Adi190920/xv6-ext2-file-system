@@ -133,6 +133,17 @@ main(int argc, char *argv[])
   de.inum = xshort(mnt_inode);
   strcpy(de.name, "mnt");
   iappend(rootino, &de, sizeof(de));
+  
+  bzero(&de, sizeof(de));
+  de.inum = xshort(mnt_inode);
+  strcpy(de.name, ".");
+  iappend(mnt_inode, &de, sizeof(de));
+
+  bzero(&de, sizeof(de));
+  de.inum = xshort(rootino);
+  strcpy(de.name, "..");
+  iappend(mnt_inode, &de, sizeof(de));
+
   for(i = 2; i < argc; i++){
     assert(index(argv[i], '/') == 0);
 

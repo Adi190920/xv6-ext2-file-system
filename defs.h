@@ -52,7 +52,7 @@ struct inode*   nameiparent(char*, char*);
 int             readi(struct inode*, char*, uint, uint);
 void            stati(struct inode*, struct stat*);
 int             writei(struct inode*, char*, uint, uint);
-void		        ext2_iinit(int dev);
+void            bzero(int , int);
 // ide.c
 void            ideinit(void);
 void            ideintr(int);
@@ -155,7 +155,11 @@ int             argstr(int, char**);
 int             fetchint(uint, int*);
 int             fetchstr(uint, char**);
 void            syscall(void);
-
+//sysfile.c
+int             isdirempty(struct inode *);
+int             ext2_isdirempty(struct inode *);
+void            fs_unlink(struct inode *, uint);
+void            ext2_unlink(struct inode *, uint);
 // timer.c
 void            timerinit(void);
 
@@ -190,10 +194,15 @@ void            clearpteu(pde_t *pgdir, char *uva);
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
 
 //ext2fs.c
-// void            readsb(int dev, struct superblock *sb);
 struct inode*   ext2_ialloc(uint, short);
 void            ext2_ilock(struct inode*);
-void            ext2_iunlock(struct inode*);
 void            ext2_iunlockput(struct inode*);
 void            ext2_iupdate(struct inode*);
 void		        ext2_iinit(int dev);
+int             ext2_readi(struct inode*, char*, uint, uint);
+struct inode*   ext2_dirlookup(struct inode*, char*, uint*);
+int             ext2_writei(struct inode*, char*, uint, uint);
+int             ext2_dirlink(struct inode*, char*, uint);
+void            ext2_stati(struct inode*, struct stat*);
+void            ext2_iput(struct inode*);
+int             ext2_namecmp(const char*, const char*);

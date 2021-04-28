@@ -598,7 +598,6 @@ ext2_dirlookup(struct inode *dp, char *name, uint *poff)
       continue;
     }
     de.name[de.name_len] = 0;
-    cprintf("dirlookup : inode : %d, name : %s  rec len : %d\n", de.inode, de.name, de.rec_len);
     if (dp->file_type->iops->namecmp(name, de.name) == 0){
       // entry matches path element
       if (poff)

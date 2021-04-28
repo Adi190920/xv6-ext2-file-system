@@ -691,12 +691,8 @@ namex(char *path, int nameiparent, char *name)
   struct inode *ip, *next;
   if(*path == '/')
     ip = iget(ROOTDEV, ROOTINO);
-  else if( namecmp(path, "mnt") == 0 ){
-    ip = iget(EXT2DEV, EXT2_ROOT_INO);
-  }
-  else{
+  else
     ip = idup(myproc()->cwd);
-  }
   while((path = skipelem(path, name)) != 0){
     ip->file_type->iops->ilock(ip);
     if(ip->type != T_DIR){
@@ -707,6 +703,13 @@ namex(char *path, int nameiparent, char *name)
       // Stop one level early.
       ip->file_type->iops->iunlock(ip);
       return ip;
+    }
+    if(namecmp(name, "mnt") == 0){
+      iunlockput(ip);
+      ip = iget(EXT2DEV, EXT2_ROOT_INO);
+      if(path == 0)
+        ilock(ip);
+      continue;
     }
     if((next = ip->file_type->iops->dirlookup(ip, name, 0)) == 0){
       ip->file_type->iops->iunlockput(ip);

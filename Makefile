@@ -182,18 +182,20 @@ UPROGS=\
 	_usertests\
 	_wc\
 	_zombie\
+	_ext2_test\
 
 fs.img: mkfs README $(UPROGS)
 	./mkfs fs.img README $(UPROGS)
 
-ext2.img:
+ext2.img: 
 	dd if=/dev/zero of=ext2.img count=10000
+	mkfs.ext2 -b 2048 ./ext2.img 
 -include *.d
 
 clean: 
 	rm -f *.tex *.dvi *.idx *.aux *.log *.ind *.ilg \
 	*.o *.d *.asm *.sym vectors.S bootblock entryother \
-	initcode initcode.out kernel xv6.img fs.img kernelmemfs \
+	initcode initcode.out kernel xv6.img fs.img ext2.img kernelmemfs \
 	xv6memfs.img mkfs .gdbinit \
 	$(UPROGS)
 

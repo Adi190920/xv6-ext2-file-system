@@ -205,9 +205,12 @@ fs_unlink(struct inode *dp, uint off)
 void
 ext2_unlink(struct inode *dp, uint off)
 {
-  struct ext2_dir_entry_2 de;
+  struct ext2_dir_entry_2 de, de1;
+  if (dp->file_type->iops->readi(dp, (char *)&de1, off, sizeof(de1)) != sizeof(de1))
+    panic("dirlookup read");
   memset(&de, 0, sizeof(de));
-  if(dp->file_type->iops->writei(dp, (char*)&de, off, sizeof(de)) != sizeof(de))
+  de.rec_len = de1.rec_len;
+  if(dp->file_type->iops->writei(dp, (char*)&de, off, de1.rec_len) != de1.rec_len)
     panic("unlink: writei");
 }
 //PAGEBREAK!
@@ -269,7 +272,6 @@ create(char *path, short type, short major, short minor)
 {
   struct inode *ip, *dp;
   char name[DIRSIZ];
-  
   if((dp = nameiparent(path, name)) == 0)
     return 0;
   dp->file_type->iops->ilock(dp);
@@ -282,7 +284,6 @@ create(char *path, short type, short major, short minor)
     ip->file_type->iops->iunlockput(ip);
     return 0;
   }
-
   if((ip = dp->file_type->iops->ialloc(dp->dev, type)) == 0)
     panic("create: ialloc");
 
@@ -302,9 +303,7 @@ create(char *path, short type, short major, short minor)
 
   if(dp->file_type->iops->dirlink(dp, name, ip->inum) < 0)
     panic("create: dirlink");
-
   dp->file_type->iops->iunlockput(dp);
-
   return ip;
 }
 

@@ -120,12 +120,12 @@ struct ext2_group_desc
         ushort   bg_itable_unused;       /* Unused inodes count */
         ushort   bg_checksum;            /* crc16(s_uuid+group_num+group_desc)*/
 };
-struct ext2_inode_large {
+struct ext2_inode {
 /*00*/	ushort	i_mode;		/* File mode */
 	ushort	i_uid;		/* Low 16 bits of Owner Uid */
 	uint	i_size;		/* Size in bytes */
 	uint	i_atime;	/* Access time */
-	uint	i_ctime;	/* Inode Change time */
+	uint	i_ctime;	/* Inode change time */
 /*10*/	uint	i_mtime;	/* Modification time */
 	uint	i_dtime;	/* Deletion Time */
 	ushort	i_gid;		/* Low 16 bits of Group Id */
@@ -163,15 +163,6 @@ struct ext2_inode_large {
 			uint	h_i_author;
 		} hurd2;
 	} osd2;				/* OS dependent 2 */
-/*80*/	ushort	i_extra_isize;
-	ushort	i_checksum_hi;	/* crc32c(uuid+inum+inode) */
-	uint	i_ctime_extra;	/* extra Change time (nsec << 2 | epoch) */
-	uint	i_mtime_extra;	/* extra Modification time (nsec << 2 | epoch) */
-	uint	i_atime_extra;	/* extra Access time (nsec << 2 | epoch) */
-/*90*/	uint	i_crtime;	/* File creation time */
-	uint	i_crtime_extra;	/* extra File creation time (nsec << 2 | epoch)*/
-	uint	i_version_hi;	/* high 32 bits for 64-bit version */
-/*9c*/	uint   i_projid;       /* Project ID */
 };
 
 struct ext2_dir_entry_2 {
@@ -197,13 +188,6 @@ struct ext2_dir_entry_2 {
 #define EXT2_INODES_PER_BLOCK(exs)  (exs.s_inodes_per_group / exs.s_blocks_per_group)
 
 //file type
-#define S_ISLNK(m)     (((m) & S_IFMT) == S_IFLNK)
-#define S_ISREG(m)     (((m) & S_IFMT) == S_IFREG)
-#define S_ISDIR(m)     (((m) & S_IFMT) == S_IFDIR)
-#define S_ISCHR(m)     (((m) & S_IFMT) == S_IFCHR)
-#define S_ISBLK(m)     (((m) & S_IFMT) == S_IFBLK)
-#define S_ISFIFO(m)    (((m) & S_IFMT) == S_IFIFO)
-#define S_ISSOCK(m)    (((m) & S_IFMT) == S_IFSOCK)
 #define S_IFMT  00170000
 #define S_IFSOCK 0140000
 #define S_IFLNK  0120000
@@ -215,3 +199,10 @@ struct ext2_dir_entry_2 {
 #define S_ISUID  0004000
 #define S_ISGID  0002000
 #define S_ISVTX  0001000
+#define S_ISLNK(m)     (((m) & S_IFMT) == S_IFLNK)
+#define S_ISREG(m)     (((m) & S_IFMT) == S_IFREG)
+#define S_ISDIR(m)     (((m) & S_IFMT) == S_IFDIR)
+#define S_ISCHR(m)     (((m) & S_IFMT) == S_IFCHR)
+#define S_ISBLK(m)     (((m) & S_IFMT) == S_IFBLK)
+#define S_ISFIFO(m)    (((m) & S_IFMT) == S_IFIFO)
+#define S_ISSOCK(m)    (((m) & S_IFMT) == S_IFSOCK)

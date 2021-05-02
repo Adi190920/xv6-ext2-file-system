@@ -240,7 +240,8 @@ qemu-gdb: fs.img xv6.img .gdbinit
 qemu-nox-gdb: fs.img xv6.img .gdbinit
 	@echo "*** Now run 'gdb'." 1>&2
 	$(QEMU) -nographic $(QEMUOPTS) -S $(QEMUGDB)
-
+run:
+	git checkout Address && make clean && make qemu < test.txt
 # CUT HERE
 # prepare dist for students
 # after running make dist, probably want to

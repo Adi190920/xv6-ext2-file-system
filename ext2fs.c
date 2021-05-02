@@ -156,7 +156,7 @@ ext2_ialloc(uint dev, short type)
   struct ext2_inode *in;
   for (i = 0; i <= b_grp_count; i++){
     gd_bp = bread(dev, 1);
-    memmove(&gd, gd_bp->data + sizeof(gd) * i, sizeof(struct ext2_group_desc));
+    memmove(&gd, gd_bp->data + sizeof(gd) * i, sizeof(gd));
     brelse(gd_bp);
     bp = bread(dev, gd.bg_inode_bitmap);
     index = zeroth_bit((char *)bp->data);
@@ -187,7 +187,6 @@ ext2_ialloc(uint dev, short type)
 void
 fill_ext2_fields(struct ext2_inode *in)
 {
-  in->i_blocks = 0;
   in->i_dtime = 0;
   in->i_faddr = 0;
   in->i_file_acl = 0;
@@ -228,7 +227,7 @@ void ext2_iupdate(struct inode *ip)
   fill_ext2_fields(&in);
   addrs = (struct ext2_addrs *)ip->addrs;
   memmove(in.i_block, addrs->addrs, sizeof(addrs->addrs));
-  memmove(bp->data + (inode_off * exs.s_inode_size), &in, sizeof(in));
+  memmove(bp->data + (inode_index * exs.s_inode_size), &in, sizeof(in));
   bwrite(bp); 
   brelse(gdbp);
   brelse(bp);
@@ -590,7 +589,7 @@ ext2_dirlookup(struct inode *dp, char *name, uint *poff)
 {
   uint off, inum;
   struct ext2_dir_entry_2 de;
-  
+
   for (off = 0; off < dp->size; off += de.rec_len){
     if (dp->file_type->iops->readi(dp, (char *)&de, off, sizeof(de)) != sizeof(de))
       panic("dirlookup read");
@@ -626,18 +625,37 @@ int ext2_dirlink(struct inode *dp, char *name, uint inum)
   // Look for an empty dirent.
   for (off = 0; off < dp->size; off += de.rec_len){
     if (dp->file_type->iops->readi(dp, (char *)&de, off, sizeof(de)) != sizeof(de))
-      panic("dirlink read");
-    if (de.rec_len == BSIZE - off % BSIZE)
+      panic("ext2_dirlink read 1");
+
+    if (de.rec_len > sizeof(de) && de.rec_len == BSIZE - (off % BSIZE)) {
+      de.rec_len = sizeof(de) - EXT2_NAME_LEN + de.name_len;
+      if(dp->file_type->iops->writei(dp, (char*)&de, off, sizeof(de)) != sizeof(de))
+        panic("ext2_dirlink write");
+      
+      off += de.rec_len;
+      if (dp->file_type->iops->readi(dp, (char*)&de, off, sizeof(de)) != sizeof(de))
+        panic("ext2_dirlink read 2");      
       break;
+    }
   }
-  de.rec_len = sizeof(de) + strlen(de.name) - EXT2_NAME_LEN;
-  if (dp->file_type->iops->writei(dp, (char *)&de, off, de.rec_len) != de.rec_len)
-    panic("dirlink");
-  off += de.rec_len;
+
+  if (off == dp->size) {
+    strncpy(de.name, name, EXT2_NAME_LEN);
+    de.name_len = strlen(de.name);
+    de.inode = inum;
+    de.rec_len = BSIZE;
+    dp->size = off + de.rec_len;
+    dp->file_type->iops->iupdate(dp);
+    if (dp->file_type->iops->writei(dp, (char*)&de, off, sizeof(de)) != sizeof(de))
+      panic("ext2_dirlink write");    
+    return 0;
+  }
   strncpy(de.name, name, EXT2_NAME_LEN);
   de.inode = inum;
   de.name_len = strlen(de.name);
   de.rec_len = BSIZE - off % BSIZE;
+  dp->size = off + de.rec_len;
+  dp->file_type->iops->iupdate(dp);
   if (dp->file_type->iops->writei(dp, (char *)&de, off, de.rec_len) != de.rec_len)
     panic("dirlink");
   return 0;

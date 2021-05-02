@@ -26,6 +26,7 @@ struct inode_operations {
   int (* isdirempty )( struct inode * dp );   
   struct inode * (* ialloc )( uint dev , short type );
   int (* namecmp )( const char *s , const char * t );
+  struct inode* (* namei )( char *s);
 };
 
 

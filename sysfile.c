@@ -119,7 +119,7 @@ sys_fstat(void)
 int
 sys_link(void)
 {
-  char name[DIRSIZ], *new, *old;
+  char name[EXT2_NAME_LEN], *new, *old;
   struct inode *dp, *ip;
 
   if(argstr(0, &old) < 0 || argstr(1, &new) < 0)
@@ -186,9 +186,11 @@ ext2_isdirempty(struct inode *dp)
   int off;
   struct ext2_dir_entry_2 de;
 
-  for(off=24; off<dp->size; off+=de.rec_len){
+  for(off=0; off<dp->size; off+=de.rec_len){
     if(dp->file_type->iops->readi(dp, (char*)&de, off, sizeof(de)) != sizeof(de))
       panic("isdirempty: readi");
+    if(namecmp(".", de.name) == 0 || namecmp("..", de.name) == 0)
+      continue;
     if(de.inode != 0)
       return 0;
   }
@@ -218,7 +220,7 @@ int
 sys_unlink(void)
 {
   struct inode *ip, *dp;
-  char name[DIRSIZ], *path;
+  char name[EXT2_NAME_LEN], *path;
   uint off;
 
   if(argstr(0, &path) < 0)
@@ -229,13 +231,10 @@ sys_unlink(void)
     end_op();
     return -1;
   }
-
   dp->file_type->iops->ilock(dp);
-
   // Cannot unlink "." or "..".
   if(dp->file_type->iops->namecmp(name, ".") == 0 || dp->file_type->iops->namecmp(name, "..") == 0)
     goto bad;
-
   if((ip = dp->file_type->iops->dirlookup(dp, name, &off)) == 0)
     goto bad;
   ip->file_type->iops->ilock(ip);
@@ -271,7 +270,7 @@ static struct inode*
 create(char *path, short type, short major, short minor)
 {
   struct inode *ip, *dp;
-  char name[DIRSIZ];
+  char name[EXT2_NAME_LEN];
   if((dp = nameiparent(path, name)) == 0)
     return 0;
   dp->file_type->iops->ilock(dp);

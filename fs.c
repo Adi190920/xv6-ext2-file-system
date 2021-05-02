@@ -657,11 +657,15 @@ dirlink(struct inode *dp, char *name, uint inum)
 //   skipelem("", name) = skipelem("////", name) = 0
 //
 static char*
-skipelem(char *path, char *name)
+skipelem(char *path, char *name, uint dev)
 {
   char *s;
   int len;
-
+  uint dirlength;
+  if(dev == ROOTDEV)
+    dirlength = DIRSIZ;
+  else  
+    dirlength = EXT2_NAME_LEN;
   while(*path == '/')
     path++;
   if(*path == 0)
@@ -670,8 +674,8 @@ skipelem(char *path, char *name)
   while(*path != '/' && *path != 0)
     path++;
   len = path - s;
-  if(len >= DIRSIZ)
-    memmove(name, s, DIRSIZ);
+  if(len >= dirlength)
+    memmove(name, s, dirlength);
   else {
     memmove(name, s, len);
     name[len] = 0;
@@ -693,7 +697,7 @@ namex(char *path, int nameiparent, char *name)
     ip = iget(ROOTDEV, ROOTINO);
   else
     ip = idup(myproc()->cwd);
-  while((path = skipelem(path, name)) != 0){
+  while((path = skipelem(path, name, ip->dev)) != 0){
     ip->file_type->iops->ilock(ip);
     if(ip->type != T_DIR){
       ip->file_type->iops->iunlockput(ip);
@@ -728,7 +732,7 @@ namex(char *path, int nameiparent, char *name)
 struct inode*
 namei(char *path)
 {
-  char name[DIRSIZ];
+  char name[EXT2_NAME_LEN];
   return namex(path, 0, name);
 }
 

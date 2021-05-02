@@ -537,7 +537,7 @@ int ext2_readi(struct inode *ip, char *dst, uint off, uint n)
   if (off + n > ip->size)
     n = ip->size - off;
   for (tot = 0; tot < n; tot += m, off += m, dst += m){
-    bp = bread(ip->dev, ext2_bmap(ip, (off + m) / BSIZE));
+    bp = bread(ip->dev, ext2_bmap(ip, off / BSIZE));
     m = min(n - tot, BSIZE - off % BSIZE);
     memmove(dst, bp->data + off % BSIZE, m);
     brelse(bp);
@@ -589,15 +589,17 @@ ext2_dirlookup(struct inode *dp, char *name, uint *poff)
 {
   uint off, inum;
   struct ext2_dir_entry_2 de;
-
+   char fname[EXT2_NAME_LEN+1];
   for (off = 0; off < dp->size; off += de.rec_len){
     if (dp->file_type->iops->readi(dp, (char *)&de, off, sizeof(de)) != sizeof(de))
       panic("dirlookup read");
     if (de.inode == 0){
       continue;
     }
-    de.name[de.name_len] = 0;
-    if (dp->file_type->iops->namecmp(name, de.name) == 0){
+
+    strncpy(fname, de.name, de.name_len);
+    fname[de.name_len] = '\0';
+    if (dp->file_type->iops->namecmp(name, fname) == 0){
       // entry matches path element
       if (poff)
         *poff = off;
